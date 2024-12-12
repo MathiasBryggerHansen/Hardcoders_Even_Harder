@@ -26,10 +26,10 @@ class CodeEvolutionHandler:
         # self.create_sandbox_environment()
         self.parameters = {'temperature': 1, 'top_p': 0.9, 'top_k': 50}
 
-    def filter_lines(self, text, ignore_keyword):
-        """Filter out lines containing the ignore keyword."""
-        lines = text.strip().splitlines()
-        return [line for line in lines if ignore_keyword not in line]
+    # def filter_lines(self, text, ignore_keyword):
+    #     """Filter out lines containing the ignore keyword."""
+    #     lines = text.strip().splitlines()
+    #     return [line for line in lines if ignore_keyword not in line]
 
     def _combine_code(self, code_string: str, max_attempts: int = 5) -> Optional[str]:
         """Process and combine code using Ollama with proper message handling and testing.
@@ -140,7 +140,7 @@ class CodeEvolutionHandler:
                 if ret_code != 0:
                     raise RuntimeError(f"Requirements installation failed: {stderr}")
 
-                ret_code, stdout, stderr = self.executor.execute_code(combined_code)
+                ret_code, stdout, stderr = self.executor.execute_code(combined_code) #TODO: convert to process_and_execute
                 if ret_code != 0:
                     raise RuntimeError(f"Code execution failed: {stderr}")
 
@@ -295,8 +295,7 @@ class CodeEvolutionHandler:
             'top_k': 50
         }
 
-    def process_with_reflection(self, code_requirements: list, max_attempts: int = 20, dummy_mode=False) -> Optional[
-        str]:
+    def process_with_reflection(self, code_requirements: list, max_attempts: int = 20, dummy_mode=False) -> Optional[execute_codestr]:
         if not code_requirements:
             raise ValueError("Code requirements list cannot be empty")
 
@@ -334,7 +333,7 @@ class CodeEvolutionHandler:
                             if not code or not code.strip():
                                 raise ValueError("Generated code is empty")
 
-                            code = self.error_handler.executor.clean_main_block(code)
+                            code = self.error_handler.executor.clean_main_block(code) #TODO: consider if app() call is better to remove
                         else:
                             code = code_requirements[requirement_index]
 
@@ -343,7 +342,7 @@ class CodeEvolutionHandler:
                         if analysis_results.get('pylint_errors') or analysis_results.get('bandit_issues'):
                             error = RuntimeError("Static analysis found issues")
                             enhanced_error = self.error_handler.enhance_error(error, code)
-                            raise RuntimeError(enhanced_error)
+                            raise RuntimeError(enhanced_error) #TODO: Where is this going?
 
                         # Use process_and_execute for consistent environment handling
                         ret_code, stdout, stderr = self.error_handler.executor.process_and_execute(code)

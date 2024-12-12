@@ -187,6 +187,7 @@ class Executor:
 
     def install_requirements(self, requirements: List[str]) -> Tuple[int, str, str]:
         """Install new requirements incrementally in the persistent environment."""
+        # TODO: Does this keep the venv constant for each requirements (function)?
         if not requirements:
             return 0, "No requirements to install", ""
 
@@ -286,7 +287,7 @@ class Executor:
         """Process and execute code with proper environment management."""
         try:
             # code = self.extract_code(response)
-            code = self.clean_main_block(response)
+            # code = self.clean_main_block(response) TODO: this should not be needed?
 
             requirements = self.extract_requirements(code)
             ret_code, stdout, stderr = self.install_requirements(requirements)
@@ -296,7 +297,7 @@ class Executor:
             return self.execute_code(code)
 
         except Exception as e:
-            return 1, "", str(e)
+            return 1, "", str(e) #TODO: should enhance_error() be called here?
 
     def cleanup(self):
         """Clean up the persistent environment when explicitly requested."""
