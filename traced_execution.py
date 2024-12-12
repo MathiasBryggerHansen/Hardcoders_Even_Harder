@@ -1,7 +1,6 @@
 import sys
 import inspect
-import traceback
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any
 from dataclasses import dataclass
 from collections import defaultdict
 
@@ -10,16 +9,18 @@ from collections import defaultdict
 class TraceEntry:
     line_no: int
     event: str
-    locals: Dict[str, Any]
+    changes: Dict[str, list]
+    indent: int  # Added to track line indentation
     return_value: Any = None
 
 
 class ValueTracer:
     def __init__(self):
         self.traces = []
-        self.line_hits = defaultdict(int)
         self.func_first_line = None
         self.error = None
+        self.value_sequences = defaultdict(list)
+        self.line_operations = set()
 
     def trace_function(self, frame, event, arg):
         line_no = frame.f_lineno
@@ -27,21 +28,41 @@ class ValueTracer:
         if self.func_first_line is None:
             self.func_first_line = frame.f_code.co_firstlineno
 
-        if event == 'line':
-            self.line_hits[line_no] += 1
+        if event in ('line', 'return'):
+            current_locals = {
+                k: v for k, v in frame.f_locals.items()
+                if not k.startswith('__')
+            }
 
-        current_locals = {
-            k: v for k, v in frame.f_locals.items()
-            if not k.startswith('__')
-        }
+            # Get source line and its indentation
+            source_lines = inspect.getsourcelines(frame.f_code)[0]
+            current_line = source_lines[line_no - frame.f_code.co_firstlineno]
+            indent = len(current_line) - len(current_line.lstrip())
 
-        trace = TraceEntry(
-            line_no=line_no,
-            event=event,
-            locals=current_locals,
-            return_value=arg if event == 'return' else None
-        )
-        self.traces.append(trace)
+            # For each variable, check if this line modifies it
+            for name, value in current_locals.items():
+                if name in current_line.strip() and ('=' in current_line or '+=' in current_line):
+                    self.line_operations.add((line_no, name))
+                    last_values = self.value_sequences[(line_no, name)]
+                    if not last_values or last_values[-1] != value:
+                        self.value_sequences[(line_no, name)].append(value)
+
+            # Create trace entry
+            changes = {}
+            for (trace_line, name), values in self.value_sequences.items():
+                if trace_line == line_no and len(values) > 0:
+                    changes[name] = values
+
+            if changes or event == 'return':
+                trace = TraceEntry(
+                    line_no=line_no,
+                    event=event,
+                    changes=changes,
+                    indent=indent,
+                    return_value=arg if event == 'return' else None
+                )
+                if changes or event == 'return':
+                    self.traces.append(trace)
 
         return self.trace_function
 
@@ -53,14 +74,18 @@ def format_value(v):
     return repr(v)
 
 
+def format_sequence(values):
+    """Format a sequence of values with arrows"""
+    return ' -> '.join(format_value(v) for v in values)
+
+
 def show_traced_execution(func, *args, **kwargs):
     tracer = ValueTracer()
 
     source = inspect.getsource(func)
     source_lines = source.splitlines()
-
     max_line_length = max(len(line.rstrip()) for line in source_lines)
-    comment_position = max_line_length + 8
+    comment_position = max_line_length + 4  # Reduced padding before comments
 
     print(f"\nFunction: {func.__name__}")
     print("-" * 80)
@@ -76,77 +101,55 @@ def show_traced_execution(func, *args, **kwargs):
     finally:
         sys.settrace(None)
 
+    # Group traces by line number
     traces_by_line = defaultdict(list)
     for trace in tracer.traces:
-        traces_by_line[trace.line_no].append(trace)
+        relative_line = trace.line_no - tracer.func_first_line
+        if 0 <= relative_line < len(source_lines):
+            traces_by_line[relative_line].append(trace)
 
-    last_values = {}
     for i, line in enumerate(source_lines):
         line_stripped = line.rstrip()
-        actual_line_no = tracer.func_first_line + i + 1  # Added +1 here
-        line_traces = traces_by_line.get(actual_line_no, [])
+        print(line_stripped, end='')
 
-        if line_traces:
-            trace = line_traces[0]
-            changes = []
+        if i in traces_by_line:
+            trace = traces_by_line[i][-1]
+            if trace.changes or trace.return_value is not None:
+                base_indent = trace.indent
+                spaces_needed = comment_position - len(line_stripped.rstrip())
+                if spaces_needed < 4:
+                    spaces_needed = 4
+                padding = " " * spaces_needed
 
-            for name, value in trace.locals.items():
-                if name not in last_values or last_values[name] != value:
-                    change = f"{name}={format_value(value)}"
-                    if line_stripped.replace(' ', '') != change.replace(' ', ''):
-                        changes.append(change)
-                    last_values[name] = value
+                changes = []
+                for name, values in trace.changes.items():
+                    if len(values) > 0 and (trace.line_no, name) in tracer.line_operations:
+                        changes.append(f"{name}={format_sequence(values)}")
 
-            if trace.return_value is not None:
-                changes.append(f"returns {format_value(trace.return_value)}")
+                if trace.return_value is not None:
+                    changes.append(f"returns {format_value(trace.return_value)}")
 
-            if changes:
-                padding = " " * (comment_position - len(line_stripped))
-                print(f"{line_stripped}{padding}# → {', '.join(changes)}")
-            else:
-                print(line_stripped)
+                if changes:
+                    print(f"{padding}# → {', '.join(changes)}", end='')
 
-            # If this was where the error occurred, show it
-            if error and actual_line_no == tracer.traces[-1].line_no:
-                print(f"{' ' * comment_position}# !!! {type(error).__name__}: {str(error)}")
+                # Add error display here, at the line where it occurred
+                if error and trace.line_no == tracer.traces[-1].line_no:
+                    if not changes:  # If we haven't printed a comment yet
+                        print(f"{padding}# → {type(error).__name__}: {str(error)}", end='')
+                    else:  # Add to existing comment
+                        print(f", {type(error).__name__}: {str(error)}", end='')
+        print()
 
-            hit_count = tracer.line_hits[actual_line_no]
-            if hit_count > 1:
-                for t in line_traces[1:]:
-                    changes = []
-                    for name, value in t.locals.items():
-                        if last_values.get(name) != value:
-                            change = f"{name}={format_value(value)}"
-                            if line_stripped.replace(' ', '') != change.replace(' ', ''):
-                                changes.append(change)
-                            last_values[name] = value
-                    if changes:
-                        print(f"{' ' * comment_position}# → {', '.join(changes)}")
-        else:
-            print(line_stripped)
-
+    # Remove or comment out the error message at the bottom
     print("-" * 80)
     if error:
-        print(f"Execution failed: {type(error).__name__}: {str(error)}")
+        # print(f"Execution failed: {type(error).__name__}: {str(error)}")  # Remove or comment this
+        print("Execution failed")  # Just indicate failure without details
     else:
         print(f"Final return value: {format_value(result)}")
 
 
-# Test functions
-def calculate_sum(x, y):
-    a = x + y
-    b = a * 2
-    return b
-
-
-def process_numbers(numbers, threshold):
-    result = 0
-    for num in numbers:
-        if num > threshold:
-            result += num
-    return result
-
-
+# Test function
 def analyze_data(data_dict):
     total = 0
     count = 0
@@ -157,23 +160,18 @@ def analyze_data(data_dict):
     return total / count if count > 0 else 0
 
 
-def failing_function(x):
-    a = x + 1
-    b = x / 0  # This will raise a ZeroDivisionError
-    return b
-
-
-# Run examples
 if __name__ == "__main__":
-    print("\nTesting calculate_sum:")
-    show_traced_execution(calculate_sum, 5, 3)
-
-    print("\nTesting process_numbers:")
-    show_traced_execution(process_numbers, [1, 5, 2, 8, 3], 4)
-
-    print("\nTesting analyze_data:")
+    print("\nTesting normal case:")
     sample_data = {'a': 10, 'b': 20, 'c': 'string', 'd': 30}
     show_traced_execution(analyze_data, sample_data)
 
-    print("\nTesting failing_function:")
-    show_traced_execution(failing_function, 5)
+    print("\nTesting error case:")
+
+
+    def buggy_calc(x):
+        a = x + 1
+        b = x / 0  # Will raise ZeroDivisionError
+        return b * 2
+
+
+    show_traced_execution(buggy_calc, 5)
