@@ -235,6 +235,7 @@ if __name__ == "__main__":
     test_annotator()
 
 #TODO: follow the example. The final annotate_code should take the following:
+#Analyze trace is not working completely - look at trace
 # """def test_function():
 #     x = 0
 #     numbers = [1, 2, 3]
