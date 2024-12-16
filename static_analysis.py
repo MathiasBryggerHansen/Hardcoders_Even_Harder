@@ -1,4 +1,5 @@
 from pylint.lint import PyLinter
+from pylint.lint import Run
 from pylint.lint import PyLinter
 from pylint.reporters import JSONReporter
 from bandit.core import manager
@@ -11,6 +12,7 @@ import sys
 from typing import Dict, List, Union
 from error_handler import WebAppErrorHandler
 import traceback
+
 from bandit.core.issue import Issue
 from execution_module import Executor
 import subprocess
@@ -72,22 +74,20 @@ class EnhancedErrorHandler(WebAppErrorHandler):
             code = code.encode('utf-8', 'ignore').decode('utf-8')
             python_path = self.executor._get_python_path()
 
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as temp_file:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8',dir=self.project_dir) as temp_file:
                 temp_file.write(code)
+                temp_file.close()  # Explicitly close the file
                 temp_file_path = temp_file.name
 
-                # Run Pylint using the executor's Python path
-                pylint_output = subprocess.run(
-                    [python_path, '-m', 'pylint', temp_file_path, '--output-format=json'],
-                    capture_output=True,
-                    text=True,
-                    encoding='utf-8'
-                )
-                pylint_results = json.loads(pylint_output.stdout) if pylint_output.stdout else []
+                try:
+                    pylint_results = Run([temp_file_path])
+                finally:
+                    # Clean up the temporary file
+                    os.unlink(temp_file_path)
 
                 # Run Bandit using the executor's Python path
                 bandit_output = subprocess.run(
-                    [python_path, '-m', 'bandit', '-f', 'json', temp_file_path],
+                    [sys.executable, '-m', 'bandit', '-f', 'json', temp_file_path],
                     capture_output=True,
                     text=True,
                     encoding='utf-8'

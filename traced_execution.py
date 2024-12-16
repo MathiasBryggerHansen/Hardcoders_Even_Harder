@@ -1,560 +1,185 @@
 import sys
-from io import StringIO
-import traceback
 import inspect
-import copy
+from typing import Dict, Any
+from dataclasses import dataclass
+from collections import defaultdict
 
 
-def analyze_trace(func_str):
-    """
-    Analyzes the execution trace of a function string and returns a dictionary
-    containing progressive variable values at each line number where they change,
-    including any errors that occur during execution.
-    """
-    variables = {}
-    old_stdout = sys.stdout
-    captured_output = StringIO()
-    sys.stdout = captured_output
-
-    try:
-        source_lines = func_str.strip().split('\n')
-        real_lines = {}
-        current_real_line = 1
-
-        for i, line in enumerate(source_lines, 1):
-            if line.strip():
-                real_lines[i] = current_real_line
-                current_real_line += 1
-
-        namespace = {}
-        exec(func_str, namespace)
-
-        functions = {}
-        for name, obj in namespace.items():
-            if inspect.isfunction(obj):
-                for i, line in enumerate(source_lines, 1):
-                    if line.strip().startswith(f'def {name}'):
-                        functions[name] = real_lines[i]
-                        break
-
-        main_func_name = None
-        for name in functions:
-            if 'test' in name.lower():
-                main_func_name = name
-                break
-
-        if main_func_name is None:
-            raise ValueError("No test function found")
-
-        progressive_variables = {}
-        last_values = {}
-        function_offsets = {}
-        stdout_lines = {}
-        error_info = {}
-        current_print_line = None
-
-        def custom_write(text):
-            if current_print_line is not None and text.strip():
-                stdout_line = current_print_line + 1
-                if stdout_line not in stdout_lines:
-                    stdout_lines[stdout_line] = []
-                stdout_lines[stdout_line].append(text.strip())
-            captured_output.write(text)
-
-        class TracedStringIO(StringIO):
-            def write(self, text):
-                custom_write(text)
-
-        def safe_copy(value):
-            try:
-                return copy.deepcopy(value)
-            except:
-                try:
-                    return copy.copy(value)
-                except:
-                    return value
-
-        def calculate_real_line(frame, func_name):
-            if func_name not in function_offsets:
-                function_offsets[func_name] = frame.f_lineno
-
-            offset = frame.f_lineno - function_offsets[func_name]
-            return functions[func_name] + offset
-
-        def tracer(frame, event, arg):
-            try:
-                if event == 'line':
-                    func_name = frame.f_code.co_name
-                    if func_name not in functions:
-                        return tracer
-
-                    nonlocal current_print_line
-                    line_num = calculate_real_line(frame, func_name)
-                    current_print_line = line_num
-
-                    for var_name, var_value in frame.f_locals.items():
-                        if var_name.startswith('__'):
-                            continue
-
-                        try:
-                            current_value = safe_copy(var_value)
-                            qualified_name = f"{func_name}_{var_name}" if func_name != main_func_name else var_name
-
-                            if qualified_name not in progressive_variables:
-                                progressive_variables[qualified_name] = {}
-                                last_values[qualified_name] = None
-
-                            if current_value != last_values[qualified_name]:
-                                if line_num not in progressive_variables[qualified_name]:
-                                    progressive_variables[qualified_name] = {}
-
-                                if line_num not in progressive_variables[qualified_name]:
-                                    progressive_variables[qualified_name][line_num] = []
-
-                                if not progressive_variables[qualified_name][line_num] or \
-                                        progressive_variables[qualified_name][line_num][-1] != current_value:
-                                    progressive_variables[qualified_name][line_num].append(current_value)
-                                    last_values[qualified_name] = current_value
-                        except Exception as e:
-                            continue
-
-                    sys.stdout = TracedStringIO()
-                elif event == 'exception':
-                    exc_type, exc_value, exc_traceback = arg
-                    func_name = frame.f_code.co_name
-                    if func_name not in functions:
-                        return tracer
-
-                    line_num = calculate_real_line(frame, func_name)
-                    error_info[line_num] = f"{exc_type.__name__}: {str(exc_value)}"
-
-            except Exception as e:
-                pass
-
-            return tracer
-
-        sys.settrace(tracer)
-        try:
-            namespace[main_func_name]()
-        except Exception as e:
-            pass
-        finally:
-            sys.settrace(None)
-
-        if stdout_lines:
-            progressive_variables['stdout'] = stdout_lines
-
-        if error_info:
-            progressive_variables['errors'] = error_info
-
-        return progressive_variables
-
-    finally:
-        sys.stdout = old_stdout
+@dataclass
+class TraceEntry:
+    line_no: int
+    event: str
+    changes: Dict[str, list]
+    indent: int  # Added to track line indentation
+    return_value: Any = None
 
 
-def annotate_code(func_str):
-    """
-    Takes a function string and returns an annotated version showing variable states at each line.
-
-    Args:
-        func_str (str): The function code to analyze and annotate
-
-    Returns:
-        str: The annotated code with variable states as comments
-    """
-    # Get trace analysis
-    trace_result = analyze_trace(func_str)
-
-    # Split the code into lines and strip right whitespace
-    lines = [line.rstrip() for line in func_str.splitlines()]
-
-    # Find the maximum line length for alignment
-    max_line_length = max(len(line) for line in lines)
-
-    # Process each line
-    annotated_lines = []
-    for i, line in enumerate(lines, 1):
-        # Start with the original line
-        annotated_line = line
-
-        # Collect all variable states for this line
-        var_states = []
-        for var_name, line_states in trace_result.items():
-            if var_name == 'stdout' or var_name == 'errors':
-                continue
-            if i in line_states:
-                # Get the last (most recent) value for this variable at this line
-                last_value = line_states[i][-1]
-                var_states.append(f"{var_name} = {repr(last_value)}")
-
-        # Add stdout if present
-        if 'stdout' in trace_result and i in trace_result['stdout']:
-            outputs = trace_result['stdout'][i]
-            var_states.append(f"output: {repr(outputs)}")
-
-        # Add error if present
-        if 'errors' in trace_result and i in trace_result['errors']:
-            var_states.append(f"error: {trace_result['errors'][i]}")
-
-        # If we have states to annotate, add them as a comment
-        if var_states:
-            # Pad the line with spaces to align comments
-            padding = " " * (max_line_length - len(line))
-            states_str = ", ".join(var_states)
-            annotated_line = f"{line}{padding}  # {states_str}"
-
-        annotated_lines.append(annotated_line)
-
-    return "\n".join(annotated_lines)
-
-
-def test_annotator():
-    test_func = """
-def test_function():
-    x = 0
-    y = []
-
-    # First operation - should work
-    y.append(x + 1)
-
-    # Second operation - should raise ValueError
-    int('not a number')
-
-    # This line shouldn't execute
-    y.append(x + 2)
-    """
-    print(analyze_trace(test_func))
-    #annotated = annotate_code(test_func)
-    print("Annotated code:")
-    # print(annotated)
-
-
-if __name__ == "__main__":
-
-    test_annotator()
-
-import sys
-import dis
-import pandas as pd
-from datetime import datetime
-from io import StringIO
-from contextlib import contextmanager
-
-
-class VariableTracer:
+class ValueTracer:
     def __init__(self):
-        self.trace_data = []
-        self.previous_vars = {}
-        self.stdout_buffer = StringIO()
-        self.base_line = None
-        self.in_loop = False
-        self.loop_vars = set()
-        self.loop_start_line = None
-
-    @contextmanager
-    def capture_stdout(self):
-        old_stdout = sys.stdout
-        sys.stdout = self.stdout_buffer
-        try:
-            yield
-        finally:
-            sys.stdout = old_stdout
-
-    def detect_loop_start(self, frame):
-        """Detect if we're at the start of a loop and identify loop variables"""
-        instructions = list(dis.get_instructions(frame.f_code))
-        current_offset = frame.f_lasti
-
-        # Find the current instruction
-        current_instr = None
-        for i, instr in enumerate(instructions):
-            if instr.offset == current_offset:
-                current_instr = instr
-                break
-
-        if current_instr:
-            # Check for both FOR_ITER and SETUP_LOOP (while loops)
-            is_loop_start = (
-                    current_instr.opname == 'FOR_ITER' or  # for loops
-                    (current_instr.opname in ('POP_JUMP_IF_FALSE', 'POP_JUMP_IF_TRUE') and  # while loops
-                     i > 0 and instructions[i - 1].opname == 'GET_ITER')
-            )
-
-            if is_loop_start:
-                self.in_loop = True
-                self.loop_start_line = frame.f_lineno
-                # Compare with previous state to find new variables
-                new_vars = set(frame.f_locals.keys()) - set(self.previous_vars.keys())
-                self.loop_vars.update(new_vars)
-                return True
-        return False
+        self.traces = []
+        self.func_first_line = None
+        self.error = None
+        self.value_sequences = defaultdict(list)
+        self.line_operations = set()
 
     def trace_function(self, frame, event, arg):
-        if event == 'call':
-            self.base_line = frame.f_lineno
+        """
 
-        if event in ['call', 'return', 'exception', 'line']:
-            current_vars = frame.f_locals.copy()
-            # Add 1 to the line number specifically for return events
-            line_adjustment = 1 if event == 'return' else 0
-            relative_line = frame.f_lineno - self.base_line + line_adjustment
+        :param frame:
+        :param event:
+        :param arg:
+        :return:
+        """
+        line_no = frame.f_lineno
 
-            # Check for loop start
-            if event == 'line':
-                is_loop_start = self.detect_loop_start(frame)
-                if is_loop_start and self.loop_vars:
-                    # Move loop variables to previous line's trace
-                    if self.trace_data:
-                        for var in self.loop_vars:
-                            if var in current_vars:
-                                self.trace_data[-1]['vars'][var] = current_vars[var]
+        if self.func_first_line is None:
+            self.func_first_line = frame.f_code.co_firstlineno
 
-            # Get current stdout
-            stdout_content = self.stdout_buffer.getvalue()
-            if stdout_content:
-                self.stdout_buffer.truncate(0)
-                self.stdout_buffer.seek(0)
+        if event in ('line', 'return'):
+            current_locals = {
+                k: v for k, v in frame.f_locals.items()
+                if not k.startswith('__')
+            }
 
-            extra_info = None
-            if event == 'return':
-                extra_info = f"returned: {arg}"
-                current_vars['return_value'] = arg
-            elif event == 'exception':
-                extra_info = f"exception: {arg[0].__name__}: {arg[1]}"
+            # Get source line and its indentation
+            source_lines = inspect.getsourcelines(frame.f_code)[0]
+            current_line = source_lines[line_no - frame.f_code.co_firstlineno]
+            indent = len(current_line) - len(current_line.lstrip())
 
-            self.trace_data.append({
-                'timestamp': datetime.now().strftime('%H:%M:%S.%f'),
-                'line': relative_line,
-                'event': event,
-                'stdout': stdout_content if stdout_content else None,
-                'extra_info': extra_info,
-                'vars': current_vars.copy()
-            })
+            # For each variable, check if this line modifies it
+            for name, value in current_locals.items():
+                if name in current_line.strip() and ('=' in current_line or '+=' in current_line):
+                    self.line_operations.add((line_no, name))
+                    last_values = self.value_sequences[(line_no, name)]
+                    if not last_values or last_values[-1] != value:
+                        self.value_sequences[(line_no, name)].append(value)
 
-            self.previous_vars = current_vars
+            # Create trace entry
+            changes = {}
+            for (trace_line, name), values in self.value_sequences.items():
+                if trace_line == line_no and len(values) > 0:
+                    changes[name] = values
+
+            if changes or event == 'return':
+                trace = TraceEntry(
+                    line_no=line_no,
+                    event=event,
+                    changes=changes,
+                    indent=indent,
+                    return_value=arg if event == 'return' else None
+                )
+                if changes or event == 'return':
+                    self.traces.append(trace)
 
         return self.trace_function
 
-    def get_trace_df(self):
-        df = pd.DataFrame(self.trace_data)
-        var_df = pd.json_normalize(df['vars'])
-        return pd.concat([df.drop('vars', axis=1), var_df], axis=1)
+
+def format_value(v):
+    """Format a value for display"""
+    if isinstance(v, (int, float, bool)):
+        return str(v)
+    return repr(v)
 
 
-def trace_variables(code_string, *args, **kwargs):
-    # Extract the function definition and parameters from the code string
-    import re
-    match = re.match(r'def\s+(\w+)\s*\((.*?)\):', code_string)
-    if not match:
-        raise ValueError("Code string must start with a function definition")
-
-    func_name, params = match.groups()
-
-    # Create the function with the original parameters
-    namespace = {}
-    exec(code_string, globals(), namespace)
-    traced_function = namespace[func_name]
-
-    # Use the existing tracing mechanism
-    tracer = VariableTracer()
-    with tracer.capture_stdout():
-        sys.settrace(tracer.trace_function)
-        try:
-            result = traced_function(*args, **kwargs)
-        except Exception as e:
-            result = f"Error: {str(e)}"
-        finally:
-            sys.settrace(None)
-    return tracer.get_trace_df(), result
+def format_sequence(values):
+    """Format a sequence of values with arrows"""
+    return ' -> '.join(format_value(v) for v in values)
 
 
+def show_traced_execution(func, *args, **kwargs):
+    tracer = ValueTracer()
 
 
-# Example usage:
-code = """def example(x):
-    a = x * 2
-    print(f"a is {a}")
+    source = inspect.getsource(func) #Returns function definition
+    source_lines = source.splitlines() #Retrieve source codes as list of lines
+    max_line_length = max(len(line.rstrip()) for line in source_lines)
+    comment_position = max_line_length + 4  # Reduced padding before comments
 
-    for i in range(3):
-        print(f"i is {i}")
+    print(f"\nFunction: {func.__name__}")
+    print("-" * 80)
 
+    result = None
+    error = None
+    sys.settrace(tracer.trace_function) #Sets a tracer which records any stacktracevenets when trace_function is executed
+    try:
+        result = func(*args, **kwargs) #Runs func with provided arguments
+    except Exception as e:
+        error = e
+        tracer.error = e
+    finally:
+        sys.settrace(None) #finally set tracer
+
+    # Group traces by line number
+    traces_by_line = defaultdict(list)
+    for trace in tracer.traces: #traces logged in the tr
+        relative_line = trace.line_no - tracer.func_first_line
+        if 0 <= relative_line < len(source_lines):
+            traces_by_line[relative_line].append(trace)
+
+    for i, line in enumerate(source_lines):
+        line_stripped = line.rstrip()
+        print(line_stripped, end='')
+
+        if i in traces_by_line:
+            trace = traces_by_line[i][-1]
+            if trace.changes or trace.return_value is not None:
+                base_indent = trace.indent
+                spaces_needed = comment_position - len(line_stripped.rstrip())
+                if spaces_needed < 4:
+                    spaces_needed = 4
+                padding = " " * spaces_needed
+
+                changes = []
+                for name, values in trace.changes.items():
+                    if len(values) > 0 and (trace.line_no, name) in tracer.line_operations:
+                        changes.append(f"{name}={format_sequence(values)}")
+
+                if trace.return_value is not None:
+                    changes.append(f"returns {format_value(trace.return_value)}")
+
+                if changes:
+                    print(f"{padding}# → {', '.join(changes)}", end='')
+
+                # Add error display here, at the line where it occurred
+                if error and trace.line_no == tracer.traces[-1].line_no:
+                    if not changes:  # If we haven't printed a comment yet
+                        print(f"{padding}# → {type(error).__name__}: {str(error)}", end='')
+                    else:  # Add to existing comment
+                        print(f", {type(error).__name__}: {str(error)}", end='')
+        print()
+
+    # Remove or comment out the error message at the bottom
+    print("-" * 80)
+    if error:
+        # print(f"Execution failed: {type(error).__name__}: {str(error)}")  # Remove or comment this
+        print("Execution failed")  # Just indicate failure without details
+    else:
+        print(f"Final return value: {format_value(result)}")
+
+
+# Test function
+def analyze_data(data_dict):
     total = 0
-    for j in range(2):
-        total += j
-        print(f"total is {total}")
-
-    return total"""
-
-trace_df, result = trace_variables(code, 5)
-#annotated_code = annotate_code_with_traces(code, trace_df)
-print(trace_df)
+    count = 0
+    for key, value in data_dict.items():
+        if isinstance(value, (int, float)):
+            total += value
+            count += 1
+    return total / count if count > 0 else 0
 
 
-def get_variable_changes(trace_df):
-    """
-    Analyzes the trace DataFrame and creates a new DataFrame where each variable
-    is represented as a tuple (value, changed_from_previous).
+if __name__ == "__main__":
+    print("\nTesting normal case:")
+    sample_data = {'a': 10, 'b': 20, 'c': 'string', 'd': 30}
+    show_traced_execution(analyze_data, sample_data)
 
-    Args:
-        trace_df (pd.DataFrame): The trace DataFrame from VariableTracer
-
-    Returns:
-        pd.DataFrame: A new DataFrame with tuples indicating value and change status
-    """
-    # Create a copy of the DataFrame to avoid modifying the original
-    result_df = trace_df.copy()
-
-    # Get all variable columns (exclude metadata columns)
-    metadata_cols = ['timestamp', 'line', 'event', 'stdout', 'extra_info']
-    var_cols = [col for col in trace_df.columns if col not in metadata_cols]
-
-    # For each variable column, create a new column with tuples
-    for col in var_cols:
-        # Create a series of booleans indicating if the value changed
-        changed = trace_df[col] != trace_df[col].shift()
-        # First row should be marked as changed since it's the initial value
-        changed.iloc[0] = True
-
-        # Create tuples of (value, changed)
-        result_df[col] = list(zip(trace_df[col], changed))
-
-    return result_df
+    print("\nTesting error case:")
 
 
-def get_variable_changes(trace_df):
-    """
-    Analyzes the trace DataFrame and creates a new DataFrame where each variable
-    is accompanied by a boolean column indicating if it changed from the previous line.
-    Handles NaN values appropriately and only marks initial non-NaN values as changed.
-
-    Args:
-        trace_df (pd.DataFrame): The trace DataFrame from VariableTracer
-
-    Returns:
-        pd.DataFrame: A new DataFrame with original values and change indicators
-    """
-    # Create a copy of the DataFrame to avoid modifying the original
-    result_df = trace_df.copy()
-
-    # Get all variable columns (exclude metadata columns)
-    metadata_cols = ['timestamp', 'line', 'event', 'stdout', 'extra_info']
-    var_cols = [col for col in trace_df.columns if col not in metadata_cols]
-
-    # For each variable column, create a new column indicating changes
-    for col in var_cols:
-        # Create a boolean column indicating if the value changed
-        change_col = f"{col}_changed"
-
-        # Use pd.isna() to handle NaN values properly
-        current_values = trace_df[col]
-        previous_values = trace_df[col].shift()
-
-        # Compare values, handling NaN properly
-        is_changed = ~((current_values.isna() & previous_values.isna()) |
-                       (current_values == previous_values))
-
-        result_df[change_col] = is_changed
-
-        # First row should only be marked as changed if it's not NaN
-        result_df.loc[result_df.index[0], change_col] = not pd.isna(current_values.iloc[0])
-
-    return result_df
+    def buggy_calc(x):
+        a = x + 1
+        b = x / 0  # Will raise ZeroDivisionError
+        return b * 2
 
 
-def annotate_code_with_changes(code_string, changes_df):
-    """
-    Annotates code with lists of values that variables take and stdout content.
-
-    Args:
-        code_string (str): The original code as a string
-        changes_df (pd.DataFrame): DataFrame with _changed columns from get_variable_changes()
-    """
-    code_lines = code_string.split('\n')
-    annotated_lines = []
-
-    # Get variable columns (excluding metadata and _changed columns)
-    metadata_cols = {'timestamp', 'line', 'event', 'stdout', 'extra_info'}
-    var_cols = {col for col in changes_df.columns
-                if not col.endswith('_changed')
-                and col not in metadata_cols}
-
-    # Track when variables are first assigned
-    first_assignment = set()
-
-    # Process each line
-    for i, line in enumerate(code_lines):
-        current_line = line.rstrip()
-        next_line_data = changes_df[changes_df['line'] == i + 1]
-        current_line_data = changes_df[changes_df['line'] == i]
-
-        annotations = []
-
-        # Handle variable changes
-        if not next_line_data.empty:
-            for var in var_cols:
-                # Special case for function parameters (use current line)
-                line_data = current_line_data if 'def' in line and var in line else next_line_data
-
-                # Check if this is an initial assignment
-                if '=' in line and var in line.split('=')[0] and var not in first_assignment:
-                    first_assignment.add(var)
-                    if f"{var}_changed" in changes_df.columns and line_data[f"{var}_changed"].any():
-                        values = [line_data[var].iloc[0]]  # Just take the first value
-                        if pd.notna(values[0]):
-                            annotations.append(f"{var} = [{values[0]}]")
-                # Regular variable change
-                elif f"{var}_changed" in changes_df.columns and line_data[f"{var}_changed"].any():
-                    values = line_data[var].dropna().unique()
-                    if len(values) > 0 and var in line:
-                        annotations.append(f"{var} = [{', '.join(str(v) for v in values)}]")
-
-        # Add the current line with any variable annotations
-        if annotations:
-            current_line += "  # " + ", ".join(annotations)
-        annotated_lines.append(current_line)
-
-        # Add stdout if print statement
-        stdout_data = changes_df[changes_df['line'] == i + 1]
-        if 'print' in line and changes_df['line'].eq(i - 1).any():
-            stdout = changes_df[changes_df['line'].eq(i - 1)]['stdout'].iloc[0]
-            if pd.notna(stdout):
-                indent = len(line) - len(line.lstrip())
-                cleaned_stdout = stdout.strip().replace('\n', '')
-                stdout_line = ' ' * indent + f"# stdout: {cleaned_stdout}"
-                annotated_lines.append(stdout_line)
-
-    return '\n'.join(annotated_lines)
-
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
-
-# Option 2: Also set the width to avoid column wrapping
-pd.set_option('display.width', None)
-pd.set_option('display.max_colwidth', None)
-
-#print(get_variable_changes(trace_df))
-
-changes_df = get_variable_changes(trace_df)
-
-
-print(annotate_code_with_changes(code_string=code, changes_df=changes_df))
-
-#print(changes_df)
-
-#TODO: follow the example. The final annotate_code should take the following:
-#Analyze trace is not working completely - look at trace
-# """def test_function():
-#     x = 0
-#     numbers = [1, 2, 3]
-#     for num in numbers:
-#         x += num
-#         print(x)"""
-#and output:
-# """def test_function():
-#     x = 0  # x = 0
-#     numbers = [1, 2, 3]  # numbers = [1, 2, 3]
-#     for num in numbers:  # num = [1, 2, 3]
-#         x += num  # x = [1, 3, 6]
-#         print(x)  # stdout = [1, 3, 6]"""
-
+    show_traced_execution(buggy_calc, 5)

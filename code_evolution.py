@@ -419,17 +419,26 @@ if __name__ == "__main__":
 
     code_requirements = [
 """
-print("hello world")
+
+    
+global z
 
 
-a=b
-""",
-"""
-print("hello frigfjas")
+if x > 10:
+    if x > 20:
+        if x > 30:
+            if x > 40:
+                print("Nested conditions!")
 
-
-a=b
 """]
+# """
+# print("hello frigfjas")
+#
+# token = ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))
+# return token
+#
+# a=b
+# """]
 
 
 

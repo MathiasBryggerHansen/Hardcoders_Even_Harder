@@ -256,7 +256,7 @@ class Executor:
                     capture_output=True,
                     text=True, #Ensures that stdout is output as string
                     encoding='utf-8',
-                    timeout=100,
+                    timeout=100, #TODO: NOTE THAT TIMEOUT SET TO 100
                     env=os.environ.copy(),  # Ensure proper environment variables
                     cwd=self.project_dir  # Set working directory explicitly
                 )
