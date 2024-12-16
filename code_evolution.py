@@ -295,11 +295,13 @@ class CodeEvolutionHandler:
             'top_k': 50
         }
 
-    def process_with_reflection(self, code_requirements: list, max_attempts: int = 20, dummy_mode=False) -> Optional[execute_codestr]:
+    def process_with_reflection(self, code_requirements: list, max_attempts: int = 20, dummy_mode=False) -> Optional[str]:
         if not code_requirements:
             raise ValueError("Code requirements list cannot be empty")
 
         combined_code = ""
+        code = ""
+        response = None
 
         try:
             for requirement_index, func in enumerate(code_requirements):
@@ -379,6 +381,7 @@ class CodeEvolutionHandler:
                     return None
 
             # Use process_and_execute for final combination
+            print("COMBINING CODE!")
             final_code = self._combine_code(combined_code)
             if not final_code:
                 raise ValueError("Failed to combine code parts")
