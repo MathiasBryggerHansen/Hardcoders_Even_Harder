@@ -12,37 +12,54 @@
 # from io import StringIO
 #
 
-def parse_message_string(message_str):
-    content = message_str.strip()[8:-1]
+import subprocess
+import pickle
+import yaml
+import tempfile
+import os
 
-    # Split by comma while respecting nested structures
-    attributes = {}
-    current_key = ""
-    current_value = ""
-    in_nested = 0
 
-    for part in content.split("="):
-        # Handle key
-        if current_key == "":
-            current_key = part.strip()
-            continue
+def process_user_data(user_input, filename):
+    """
+    This function contains several security vulnerabilities that Bandit would detect:
+    - Command injection vulnerability
+    - Unsafe deserialization
+    - Unsafe YAML loading
+    - Insecure temp file creation
+    - Hardcoded password
+    """
+    # B603: subprocess call with shell=True
+    subprocess.Popen(f"echo {user_input}", shell=True)
 
-        # Handle value
-        value_parts = part.split(",")
-        if len(value_parts) > 1:
-            current_value = value_parts[0].strip().strip("'")
-            attributes[current_key] = current_value
-            current_key = value_parts[-1].strip()
-        else:
-            attributes[current_key] = part.strip().strip("'")
+    # B301: Pickle and its variants can be unsafe when used to deserialize untrusted data
+    with open(filename, 'rb') as f:
+        data = pickle.load(f)
 
-    return attributes
+    # B506: Use of unsafe yaml load
+    config = yaml.load("""
+        server: localhost
+        port: 8080
+        password: hardcoded_secret123
+    """)
 
-# Example usage
-message = """Message(msg_id='C0303', symbol='trailing-whitespace', msg='Trailing whitespace', C='C', category='convention', confidence=Confidence(name='HIGH', description='Warning that is not based on inference result.'), abspath='C:\\Users\\Lasse\\PycharmProjects\\Hardcoders_Even_Harder\\tmpvawjruin.py', path='tmpvawjruin.py', module='tmpvawjruin', obj='', line=3, column=0, end_line=None, end_column=None)"""
+    # B108: Probable insecure usage of temp file/directory
+    temp = tempfile.mktemp()
+    with open(temp, 'w') as f:
+        f.write(user_input)
 
-result = parse_message_string(message)
-print(result)
+    # B105: Hardcoded password string
+    db_password = "super_secret_password123"
+
+    # B601: Possible shell injection via Paramiko
+    os.system(f"cat {filename}")
+
+    # B307: Use of eval
+    result = eval(user_input)
+
+    return data, config, result
+
+# Usage (DO NOT USE IN PRODUCTION):
+# process_user_data("malicious_input", "untrusted.pkl")
 # class CaptureReporter(BaseReporter):
 #     def __init__(self):
 #         super().__init__()
