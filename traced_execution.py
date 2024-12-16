@@ -23,6 +23,13 @@ class ValueTracer:
         self.line_operations = set()
 
     def trace_function(self, frame, event, arg):
+        """
+
+        :param frame:
+        :param event:
+        :param arg:
+        :return:
+        """
         line_no = frame.f_lineno
 
         if self.func_first_line is None:
@@ -82,8 +89,9 @@ def format_sequence(values):
 def show_traced_execution(func, *args, **kwargs):
     tracer = ValueTracer()
 
-    source = inspect.getsource(func)
-    source_lines = source.splitlines()
+
+    source = inspect.getsource(func) #Returns function definition
+    source_lines = source.splitlines() #Retrieve source codes as list of lines
     max_line_length = max(len(line.rstrip()) for line in source_lines)
     comment_position = max_line_length + 4  # Reduced padding before comments
 
@@ -92,18 +100,18 @@ def show_traced_execution(func, *args, **kwargs):
 
     result = None
     error = None
-    sys.settrace(tracer.trace_function)
+    sys.settrace(tracer.trace_function) #Sets a tracer which records any stacktracevenets when trace_function is executed
     try:
-        result = func(*args, **kwargs)
+        result = func(*args, **kwargs) #Runs func with provided arguments
     except Exception as e:
         error = e
         tracer.error = e
     finally:
-        sys.settrace(None)
+        sys.settrace(None) #finally set tracer
 
     # Group traces by line number
     traces_by_line = defaultdict(list)
-    for trace in tracer.traces:
+    for trace in tracer.traces: #traces logged in the tr
         relative_line = trace.line_no - tracer.func_first_line
         if 0 <= relative_line < len(source_lines):
             traces_by_line[relative_line].append(trace)
