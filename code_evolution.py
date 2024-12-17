@@ -22,7 +22,7 @@ class CodeEvolutionHandler:
         self.project_dir = os.getcwd()
         # self.installed_packages: Set[str] = set()
         self.error_handler = EnhancedErrorHandler()
-        # self.executor = self.error_handler.executor
+        self.executor = self.error_handler.executor
         # self.create_sandbox_environment()
         self.parameters = {'temperature': 1, 'top_p': 0.9, 'top_k': 50}
 
@@ -31,8 +31,10 @@ class CodeEvolutionHandler:
     #     lines = text.strip().splitlines()
     #     return [line for line in lines if ignore_keyword not in line]
 
-    def _combine_code(self, code_string: str, max_attempts: int = 5) -> Optional[str]:
+    def _combine_code(self, code_string: str,  dummy_mode: bool = False, max_attempts: int = 5) -> Optional[str]:
         """Process and combine code using Ollama with proper message handling and testing.
+        Ensures that the code genereated through the various requirements calls and error rectifications is combined into a functional app
+
 
         Args:
             code_string (str): The code snippets to combine
@@ -109,38 +111,44 @@ class CodeEvolutionHandler:
 
                 messages.append(base_user_message)
 
+
                 # Generate combined code
+                if not dummy_mode:
+                    response = ollama.chat(
+                        model="qwen2.5-coder",
+                        messages=messages,
+                        options=self.parameters
+                    )
+                    if not response or not isinstance(response, dict):
+                        raise RuntimeError(f"Unexpected response format: {response}")
 
-                response = ollama.chat(
-                    model="qwen2.5-coder",
-                    messages=messages,
-                    options=self.parameters
-                )
+                    if 'message' not in response or 'content' not in response['message']:
+                        raise RuntimeError(f"Response missing required fields: {response}")
+                    combined_code = self.executor.extract_code(response)
+                    if not combined_code or not combined_code.strip():
+                        raise ValueError("Generated empty code")
+                    combined_code = self.executor.clean_main_block(combined_code)
 
-                if not response or not isinstance(response, dict):
-                    raise RuntimeError(f"Unexpected response format: {response}")
+                    # Analyze and test the code
+                    analysis_results = self.error_handler.analyze_code(combined_code)
+                    if analysis_results and isinstance(analysis_results, dict):
+                        if analysis_results.get('pylint_errors') or analysis_results.get('bandit_issues'):
+                            raise RuntimeError("Static analysis found issues")
 
-                if 'message' not in response or 'content' not in response['message']:
-                    raise RuntimeError(f"Response missing required fields: {response}")
+                    requirements = self.executor.extract_requirements(combined_code)
+                    ret_code, stdout, stderr = self.executor.install_requirements(requirements)
 
-                combined_code = self.executor.extract_code(response)
-                if not combined_code or not combined_code.strip():
-                    raise ValueError("Generated empty code")
+                    if ret_code != 0:
+                        raise RuntimeError(f"Requirements installation failed: {stderr}")
+                else:
+                    combined_code = code_string
 
-                combined_code = self.executor.clean_main_block(combined_code)
 
-                # Analyze and test the code
-                analysis_results = self.error_handler.analyze_code(combined_code)
-                if analysis_results and isinstance(analysis_results, dict):
-                    if analysis_results.get('pylint_errors') or analysis_results.get('bandit_issues'):
-                        raise RuntimeError("Static analysis found issues")
 
-                requirements = self.executor.extract_requirements(combined_code)
-                ret_code, stdout, stderr = self.executor.install_requirements(requirements)
-                if ret_code != 0:
-                    raise RuntimeError(f"Requirements installation failed: {stderr}")
+
 
                 ret_code, stdout, stderr = self.executor.execute_code(combined_code) #TODO: convert to process_and_execute
+
                 if ret_code != 0:
                     raise RuntimeError(f"Code execution failed: {stderr}")
 
@@ -161,6 +169,8 @@ class CodeEvolutionHandler:
 
                 if attempt == max_attempts - 1:
                     return None
+
+
 
         return None
 
@@ -295,13 +305,21 @@ class CodeEvolutionHandler:
             'top_k': 50
         }
 
-    def process_with_reflection(self, code_requirements: list, max_attempts: int = 20, dummy_mode=False) -> Optional[str]:
+    def process_with_reflection(self, code_requirements: list, max_attempts: int = 20, dummy_mode=False): #-> Optional[execute_code: str]:
+        #TODO: Review docstring
+        """
+        Function processing the LLM generated code.
+        Runs a static analysis, annotates the errors, executes the code, detects runtime errors, and iteratively performs this process until executable code is generated.
+
+        :param code_requirements: The requirements for the code, provided by the user
+        :param max_attempts: Maximum iterations for attempting to create executable code
+        :param dummy_mode: if dummy_mode=True, run system with limited capabilities for test purposes
+        :return:
+        """
         if not code_requirements:
             raise ValueError("Code requirements list cannot be empty")
 
         combined_code = ""
-        code = ""
-        response = None
 
         try:
             for requirement_index, func in enumerate(code_requirements):
@@ -349,7 +367,7 @@ class CodeEvolutionHandler:
                         # Use process_and_execute for consistent environment handling
                         ret_code, stdout, stderr = self.error_handler.executor.process_and_execute(code)
                         print("ret_code, stdout, stderr:")
-                        print(ret_code, stdout, stdout)
+                        print(ret_code, stdout, stderr)
                         if ret_code != 0:
                             error = RuntimeError(f"Code execution failed: {stderr}")
                             enhanced_error = self.error_handler.enhance_error(error, code, stdout)
@@ -376,13 +394,15 @@ class CodeEvolutionHandler:
                                 combined_code += code + "\n\n"
                                 requirement_success = True
                                 break
+                    # finally:
+                    #     if dummy_mode:
+                    #         break
 
                 if not requirement_success:
                     return None
 
             # Use process_and_execute for final combination
-            print("COMBINING CODE!")
-            final_code = self._combine_code(combined_code)
+            final_code = self._combine_code(code_string=combined_code, dummy_mode = dummy_mode)
             if not final_code:
                 raise ValueError("Failed to combine code parts")
 
@@ -391,198 +411,72 @@ class CodeEvolutionHandler:
         except Exception as e:
             print(f"Fatal error in process_with_reflection: {str(e)}")
             return None
-    # def process_with_reflection(self, code_requirements: list, max_attempts: int = 20, dummy_mode = False) -> Optional[str]:
-    #     """Process code requirements with multiple attempts and enhanced error handling.
-    #
-    #     Args:
-    #         code_requirements (list): List of code requirements to implement
-    #         max_attempts (int): Maximum number of attempts per requirement
-    #
-    #     Returns:
-    #         Optional[str]: The successfully combined and tested code, or None if attempts fail
-    #     """
-    #     if not code_requirements:
-    #         raise ValueError("Code requirements list cannot be empty")
-    #     combined_code = ""
-    #
-    #     try:
-    #
-    #         for requirement_index, func in enumerate(code_requirements):
-    #             if not isinstance(func, str) or not func.strip():
-    #                 raise ValueError(f"Invalid requirement at index {requirement_index}")
-    #
-    #             requirement_success = False
-    #             self.error_handler.reset_tracking()
-    #             self.reset_parameters()
-    #
-    #             for attempt in range(max_attempts):
-    #                 self.get_next_parameters()
-    #
-    #                 try:
-    #                     print(f"\nRequirement {requirement_index + 1}/{len(code_requirements)}, "
-    #                           f"Attempt {attempt + 1}/{max_attempts}")
-    #
-    #                     messages = self.build_chat_prompt(func, attempt)
-    #
-    #                     # Add enhanced error context for the LLM if we have previous attempts
-    #                     if attempt > 0 and self.history:
-    #                         last_attempt = self.history[-1]
-    #                         error_analysis_context = (
-    #                             "\nPrevious Attempt (with analysis):\n"
-    #                             f"{last_attempt.error}\n"
-    #                         # this contains the code with all inline comments including stdout
-    #                         )
-    #                         # print("error_analysis_context")
-    #                         # print(error_analysis_context)
-    #
-    #                         # Add information about recurring errors
-    #                         if hasattr(self.error_handler, 'error_count'):
-    #                             recurring_patterns = [
-    #                                 f"- {error}: appeared {count} times - needs fundamental redesign"
-    #                                 for error, count in self.error_handler.error_count.items()
-    #                                 if count > 1
-    #                             ]
-    #                             if recurring_patterns:
-    #                                 error_analysis_context += (
-    #                                         "\nPersistent Error Patterns to Resolve:\n" +
-    #                                         "\n".join(recurring_patterns)
-    #                                 )
-    #
-    #                         messages.append({
-    #                             'role': 'system',
-    #                             'content': error_analysis_context
-    #                         })
-    #
-    #
-    #                     if not dummy_mode:
-    #                         response = ollama.chat(
-    #                             model="qwen2.5-coder",
-    #                             messages=messages,
-    #                             options=self.parameters
-    #                         )
-    #
-    #
-    #                         if 'response' not in locals():
-    #                             raise RuntimeError(f"Invalid response format from code generation: {response}")
-    #                         # print("llm response")
-    #                         # print(response['message']['content'])
-    #                         code = self.executor.extract_code(response)
-    #                         print("extracted code from response")
-    #                         print(code)
-    #                         if not code or not code.strip():
-    #                             raise ValueError("Generated code is empty")
-    #
-    #                         code = self.executor.clean_main_block(code)
-    #
-    #                     else:
-    #                         code = code_requirements[requirement_index]
-    #
-    #                     print("analyzing1:")
-    #                     # print(code)
-    #                     # Perform static analysis
-    #                     analysis_results = self.error_handler.analyze_code(code)
-    #                     if 'analysis_results' in locals():
-    #                         if analysis_results.get('pylint_errors') or analysis_results.get('bandit_issues'):
-    #                             error = RuntimeError("Static analysis found issues")
-    #                             enhanced_error = self.error_handler.enhance_error(
-    #                                 error,
-    #                                 code,
-    #                                 None
-    #                             )
-    #                             raise RuntimeError(enhanced_error)
-    #
-    #
-    #                     # Install and test requirements
-    #                     requirements = self.executor.extract_requirements(code)
-    #                     ret_code, stdout, stderr = self.executor.install_requirements(requirements)
-    #                     if ret_code != 0:
-    #                         error = RuntimeError(f"Requirements installation failed: {stderr}")
-    #                         enhanced_error = self.error_handler.enhance_error(
-    #                             error,
-    #                             code,
-    #                             stdout if 'stdout' in locals() else None
-    #                         )
-    #                         raise RuntimeError(enhanced_error)
-    #                     print("code")
-    #                     print(code)
-    #                     ret_code, stdout, stderr = self.executor.execute_code(code)
-    #                     print("print(ret_code, stdout, stderr)")
-    #                     print(ret_code, stdout, stderr)
-    #
-    #
-    #                     if ret_code != 0:
-    #                         error = RuntimeError(f"Code execution failed: {stderr}")
-    #                         enhanced_error = self.error_handler.enhance_error(
-    #                             error,
-    #                             code,
-    #                             stdout if 'stdout' in locals() else None
-    #                         )
-    #                         raise RuntimeError(enhanced_error)
-    #                     print("CODE EXECUTED SUCCESSFULLY")
-    #                     self.add_attempt(code, "Success - no errors", stdout)
-    #                     combined_code += code + "\n\n"
-    #                     requirement_success = True
-    #                     break
-    #
-    #                 except Exception as e:
-    #                     code_to_analyze = code if 'code' in locals() else func
-    #                     enhanced_error = self.error_handler.enhance_error(e, code_to_analyze)
-    #                     print(f"Attempt {attempt + 1} failed:\n{enhanced_error}")
-    #
-    #                     self.add_attempt(
-    #                         code_to_analyze,
-    #                         enhanced_error,
-    #                         stdout if 'stdout' in locals() else None
-    #                     )
-    #
-    #                     if attempt == max_attempts - 1:
-    #                         if 'code' in locals():
-    #                             combined_code += code + "\n\n"
-    #                             requirement_success = True
-    #                             break
-    #
-    #             if not requirement_success:
-    #                 return None
-    #
-    #         # Combine and verify final code
-    #         final_response = self._combine_code(combined_code)
-    #         if not final_response:
-    #             raise ValueError("Failed to combine code parts")
-    #
-    #         final_code = self.extract_code(final_response)
-    #         if not final_code or not final_code.strip():
-    #             raise ValueError("Final code generation produced empty result")
-    #
-    #         return final_code
-    #
-    #     except Exception as e:
-    #         print(f"Fatal error in process_with_reflection: {str(e)}")
-    #         return None
+
 
 if __name__ == "__main__":
+    #dummy_mode runs the system with limited capabilities for test purposes
+    dummy_mode = True
+
+    #CodeEvolutionHandler contains all the functionalities for running the system
     handler = CodeEvolutionHandler()
-    code_requirements = [
-        "validate_request_format(request_data) -> tuple[bool, str] - Verify JSON data has required fields (email, age, subscription_tier, user_data) with correct data types. Handle: malformed JSON -> 400, missing/null fields -> 400, invalid data types -> 422. Return (is_valid, error_msg)",
 
-        "validate_user_data(user_data) -> tuple[bool, str] - Check user_data contains valid preferences (notifications bool, theme str), payment_info (method, currency), and usage_metrics (array[3-10] of numbers). Handle: array index out of bounds -> 500, type conversion errors -> 422. Return (is_valid, error_msg)",
+    if not dummy_mode:
+        code_requirements = [
+            "validate_request_format(request_data) -> tuple[bool, str] - Verify JSON data has required fields (email, age, subscription_tier, user_data) with correct data types. Handle: malformed JSON -> 400, missing/null fields -> 400, invalid data types -> 422. Return (is_valid, error_msg)",
 
-        "validate_business_rules(email, age, subscription_tier) -> tuple[bool, str] - Validate email is @validcompany.com, age is 18-100, subscription_tier in ['basic', 'pro', 'enterprise']. Handle: type conversion errors -> 422. Return (is_valid, error_msg)",
+            "validate_user_data(user_data) -> tuple[bool, str] - Check user_data contains valid preferences (notifications bool, theme str), payment_info (method, currency), and usage_metrics (array[3-10] of numbers). Handle: array index out of bounds -> 500, type conversion errors -> 422. Return (is_valid, error_msg)",
 
-        "calculate_metrics(age, usage_metrics, payment_method, subscription_tier) -> dict - Calculate price (basic:$10, pro:$25, enterprise:$50), risk_score (age * avg_usage / 10), premium_multiplier (1.5 if crypto). Handle: division by zero -> 500, integer overflow -> 500. Return calculated metrics dict",
+            "validate_business_rules(email, age, subscription_tier) -> tuple[bool, str] - Validate email is @validcompany.com, age is 18-100, subscription_tier in ['basic', 'pro', 'enterprise']. Handle: type conversion errors -> 422. Return (is_valid, error_msg)",
 
-        "process_request() -> Response - Main /api/process POST handler: check rate limit (429 if exceeded), validate data (400/422 for validation fails), calculate metrics (500 for calculation errors), add timestamp and renewal_date, return appropriate HTTP response",
+            "calculate_metrics(age, usage_metrics, payment_method, subscription_tier) -> dict - Calculate price (basic:$10, pro:$25, enterprise:$50), risk_score (age * avg_usage / 10), premium_multiplier (1.5 if crypto). Handle: division by zero -> 500, integer overflow -> 500. Return calculated metrics dict",
 
-        "get_rate_limit_status(ip_address) -> tuple[bool, int] - Track and check if IP exceeded 5 requests/minute, return (is_allowed, current_count). Handle concurrent access to rate limit data",
+            "process_request() -> Response - Main /api/process POST handler: check rate limit (429 if exceeded), validate data (400/422 for validation fails), calculate metrics (500 for calculation errors), add timestamp and renewal_date, return appropriate HTTP response",
 
-        "get_system_metrics() -> dict - Get current memory usage and system uptime statistics. Handle potential OS-level errors -> 500",
+            "get_rate_limit_status(ip_address) -> tuple[bool, int] - Track and check if IP exceeded 5 requests/minute, return (is_allowed, current_count). Handle concurrent access to rate limit data",
 
-        "health_check() -> Response - Handle /api/health GET requests: return system metrics and rate limit counts. Handle service unavailability -> 503",
+            "get_system_metrics() -> dict - Get current memory usage and system uptime statistics. Handle potential OS-level errors -> 500",
 
-        "Error handlers: handle_bad_request() -> 400 for malformed JSON/missing/null fields, handle_validation_error() -> 422 for invalid data types/values, handle_rate_limit() -> 429 for rate exceeded, handle_server_error() -> 500 for calculation/overflow/division errors"
-    ]
+            "health_check() -> Response - Handle /api/health GET requests: return system metrics and rate limit counts. Handle service unavailability -> 503",
 
-#     code_requirements = ["""
-# print("hello world")
-#     """]
+            "Error handlers: handle_bad_request() -> 400 for malformed JSON/missing/null fields, handle_validation_error() -> 422 for invalid data types/values, handle_rate_limit() -> 429 for rate exceeded, handle_server_error() -> 500 for calculation/overflow/division errors"
+        ]
+    else:
+    #     code_requirements = [
+    # """
+    #
+    #
+    # global z
+    #
+    #
+    # if x > 10:
+    #     if x > 20:
+    #         if x > 30:
+    #             if x > 40:
+    #                 print("Nested conditions!")
+    #
+    #
+    #
+    # temp = tempfile.mktemp()
+    # with open(temp, 'w') as f:
+    #     f.write(user_input)
+    #
+    #
+    # db_password = "super_secret_password123"
+    #
+    #
+    # os.system(f"cat {filename}")
+    #
+    # """]
 
-    results = handler.process_with_reflection(code_requirements)
+        code_requirements = [
+            """
+def simple_func(x):
+    y = x*5
+    
+    return y
+    
+            """]
+
+
+
+    results = handler.process_with_reflection(code_requirements=code_requirements,max_attempts=20,dummy_mode=dummy_mode)

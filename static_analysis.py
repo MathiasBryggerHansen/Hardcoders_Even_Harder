@@ -1,4 +1,5 @@
 from pylint.lint import PyLinter
+from pylint.lint import Run
 from pylint.lint import PyLinter
 from pylint.reporters import JSONReporter
 from bandit.core import manager
@@ -11,11 +12,28 @@ import sys
 from typing import Dict, List, Union
 from error_handler import WebAppErrorHandler
 import traceback
+
 from bandit.core.issue import Issue
 from execution_module import Executor
 import subprocess
 import json
 import time
+
+from pylint.lint import Run
+from pylint.reporters import BaseReporter
+from io import StringIO
+
+class CaptureReporter(BaseReporter):
+
+    def __init__(self):
+        super().__init__()
+        self.output = StringIO()
+
+    def handle_message(self, msg):
+        self.output.write(str(msg) + '\n')
+
+    def _display(self, layout):
+        pass
 
 
 class EnhancedErrorHandler(WebAppErrorHandler):
@@ -72,32 +90,90 @@ class EnhancedErrorHandler(WebAppErrorHandler):
             code = code.encode('utf-8', 'ignore').decode('utf-8')
             python_path = self.executor._get_python_path()
 
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as temp_file:
+            # Find the starting line number of the code snippet
+            lines = code.splitlines()
+
+            # Find first non-empty line
+            start_index = 0
+            for i, line in enumerate(lines):
+                if line.strip():
+                    start_index = i
+                    break
+
+            # Rejoin remaining lines
+            '\n'.join(lines[start_index:])
+
+            # Create temp file for analysis
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', encoding='utf-8',
+                                             dir=os.getcwd()) as temp_file:
                 temp_file.write(code)
+
                 temp_file_path = temp_file.name
 
-                # Run Pylint using the executor's Python path
-                pylint_output = subprocess.run(
-                    [python_path, '-m', 'pylint', temp_file_path, '--output-format=json'],
-                    capture_output=True,
-                    text=True,
-                    encoding='utf-8'
-                )
-                pylint_results = json.loads(pylint_output.stdout) if pylint_output.stdout else []
+                # Run Pylint analysis
+                reporter = CaptureReporter()
+                Run([temp_file_path], reporter=reporter, exit=False)
+                str_pylint_results = reporter.output.getvalue()
 
-                # Run Bandit using the executor's Python path
+                # Initialize structures to track errors
+                pylint_results = []
+                content = str_pylint_results.strip()[8:-1]
+                previous_error = None  # Track just the previous error
+
+                # Split and process Pylint results
+                parts = content.split(",")
+                current_msg = {}
+
+                # Process Pylint results while checking for consecutive duplicates
+                for part in parts:
+                    if part.strip().startswith("msg="):
+                        msg_value = part.split("=")[1].strip().strip("'")
+                        current_msg['msg'] = msg_value
+                    elif part.strip().startswith("line="):
+                        line_value = int(part.split("=")[1].strip())
+                        current_msg['line'] = line_value + start_index
+                    elif part.strip().startswith("symbol="):
+                        symbol_value = part.split("=")[1].strip()
+                        current_msg['symbol'] = symbol_value
+                    elif part.strip().startswith("category="):
+                        category_value = part.split("=")[1].strip()
+                        current_msg['category'] = category_value
+
+                        # Create an identifier for this error
+                        error_key = f"{current_msg['msg']}_{current_msg['symbol']}"
+
+                        # Only append if it's not identical to the previous error
+                        if error_key != previous_error:
+                            pylint_results.append(current_msg.copy())
+                            previous_error = error_key
+
+                        current_msg = {}
+
+                # Run Bandit analysis
                 bandit_output = subprocess.run(
-                    [python_path, '-m', 'bandit', '-f', 'json', temp_file_path],
+                    [sys.executable, '-m', 'bandit', '-f', 'json', temp_file_path],
                     capture_output=True,
                     text=True,
                     encoding='utf-8'
                 )
                 bandit_results = json.loads(bandit_output.stdout) if bandit_output.stdout else {}
 
+                # Process Bandit results to remove consecutive duplicates
+                filtered_bandit_results = []
+                previous_bandit_issue = None
+
+                for issue in bandit_results.get('results', []):
+                    # Create a unique identifier for the bandit issue
+                    issue_key = f"{issue.get('issue_text')}_{issue.get('test_id')}"
+
+                    if issue_key != previous_bandit_issue:
+                        filtered_bandit_results.append(issue)
+                        previous_bandit_issue = issue_key
+
                 self.static_analysis_results = {
                     'pylint_errors': pylint_results,
-                    'bandit_issues': bandit_results.get('results', []),
-                    'error_patterns': self._extract_error_patterns(pylint_results, bandit_results)
+                    'bandit_issues': filtered_bandit_results,
+                    'error_patterns': self._extract_error_patterns(pylint_results, {'results': filtered_bandit_results})
                 }
 
                 return self.static_analysis_results
@@ -157,11 +233,11 @@ class EnhancedErrorHandler(WebAppErrorHandler):
             # Handle Pylint errors
             if 'pylint_errors' in self.static_analysis_results:
                 for pylint_error in self.static_analysis_results['pylint_errors']:
-                    if pylint_error['type'] in ('error', 'warning'):
+                    if pylint_error['category'] in ("'error'", "'warning'"):
                         line_num = pylint_error['line'] - 1  # Convert to 0-based indexing
                         if 0 <= line_num < len(annotated_lines):
                             # Maintain consistent formatting with exactly 80 characters before comment
-                            comment = f"# {pylint_error['type'].upper()}: {pylint_error['message']} ({pylint_error['symbol']})"
+                            comment = f"# {pylint_error['category'].upper()}: {pylint_error['msg']} ({pylint_error['symbol']})"
                             annotated_lines[line_num] = f"{annotated_lines[line_num]:<80} {comment}"
 
             # Handle Bandit security issues
@@ -238,8 +314,8 @@ class EnhancedErrorHandler(WebAppErrorHandler):
         patterns = []
 
         for result in pylint_results:
-            if result['type'] in ('error', 'warning'):
-                patterns.append(f"Line {result['line']}: {result['message']}")
+            if result['category'] in ("'error'", "'warning'"):
+                patterns.append(f"Line {result['line']}: {result['msg']}")
 
         for issue in bandit_results:
             if isinstance(issue, dict):
