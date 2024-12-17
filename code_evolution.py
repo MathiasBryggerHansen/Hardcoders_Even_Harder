@@ -143,10 +143,6 @@ class CodeEvolutionHandler:
                 else:
                     combined_code = code_string
 
-
-
-
-
                 ret_code, stdout, stderr = self.executor.execute_code(combined_code) #TODO: convert to process_and_execute
 
                 if ret_code != 0:
@@ -169,8 +165,6 @@ class CodeEvolutionHandler:
 
                 if attempt == max_attempts - 1:
                     return None
-
-
 
         return None
 
@@ -373,6 +367,7 @@ class CodeEvolutionHandler:
                             enhanced_error = self.error_handler.enhance_error(error, code, stdout)
                             raise RuntimeError(enhanced_error)
 
+
                         self.add_attempt(code, "Success - no errors", stdout)
                         combined_code += code + "\n\n"
                         requirement_success = True
@@ -382,7 +377,6 @@ class CodeEvolutionHandler:
                         code_to_analyze = code if 'code' in locals() else func
                         enhanced_error = self.error_handler.enhance_error(e, code_to_analyze)
                         print(f"Attempt {attempt + 1} failed:\n{enhanced_error}")
-
                         self.add_attempt(
                             code_to_analyze,
                             enhanced_error,
@@ -405,7 +399,8 @@ class CodeEvolutionHandler:
             final_code = self._combine_code(code_string=combined_code, dummy_mode = dummy_mode)
             if not final_code:
                 raise ValueError("Failed to combine code parts")
-
+            print("final_code:")
+            print(final_code)
             return final_code
 
         except Exception as e:
@@ -415,7 +410,7 @@ class CodeEvolutionHandler:
 
 if __name__ == "__main__":
     #dummy_mode runs the system with limited capabilities for test purposes
-    dummy_mode = True
+    dummy_mode = False
 
     #CodeEvolutionHandler contains all the functionalities for running the system
     handler = CodeEvolutionHandler()
@@ -441,33 +436,6 @@ if __name__ == "__main__":
             "Error handlers: handle_bad_request() -> 400 for malformed JSON/missing/null fields, handle_validation_error() -> 422 for invalid data types/values, handle_rate_limit() -> 429 for rate exceeded, handle_server_error() -> 500 for calculation/overflow/division errors"
         ]
     else:
-    #     code_requirements = [
-    # """
-    #
-    #
-    # global z
-    #
-    #
-    # if x > 10:
-    #     if x > 20:
-    #         if x > 30:
-    #             if x > 40:
-    #                 print("Nested conditions!")
-    #
-    #
-    #
-    # temp = tempfile.mktemp()
-    # with open(temp, 'w') as f:
-    #     f.write(user_input)
-    #
-    #
-    # db_password = "super_secret_password123"
-    #
-    #
-    # os.system(f"cat {filename}")
-    #
-    # """]
-
         code_requirements = [
             """
 def simple_func(x):
@@ -476,7 +444,5 @@ def simple_func(x):
     return y
     
             """]
-
-
 
     results = handler.process_with_reflection(code_requirements=code_requirements,max_attempts=20,dummy_mode=dummy_mode)
