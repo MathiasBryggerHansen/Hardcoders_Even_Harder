@@ -22,7 +22,7 @@ class CodeEvolutionHandler:
         self.project_dir = os.getcwd()
         # self.installed_packages: Set[str] = set()
         self.error_handler = EnhancedErrorHandler()
-        # self.executor = self.error_handler.executor
+        self.executor = self.error_handler.executor
         # self.create_sandbox_environment()
         self.parameters = {'temperature': 1, 'top_p': 0.9, 'top_k': 50}
 
@@ -31,8 +31,10 @@ class CodeEvolutionHandler:
     #     lines = text.strip().splitlines()
     #     return [line for line in lines if ignore_keyword not in line]
 
-    def _combine_code(self, code_string: str, max_attempts: int = 5) -> Optional[str]:
+    def _combine_code(self, code_string: str,  dummy_mode: bool = False, max_attempts: int = 5) -> Optional[str]:
         """Process and combine code using Ollama with proper message handling and testing.
+        Ensures that the code genereated through the various requirements calls and error rectifications is combined into a functional app
+
 
         Args:
             code_string (str): The code snippets to combine
@@ -109,38 +111,44 @@ class CodeEvolutionHandler:
 
                 messages.append(base_user_message)
 
+
                 # Generate combined code
+                if not dummy_mode:
+                    response = ollama.chat(
+                        model="qwen2.5-coder",
+                        messages=messages,
+                        options=self.parameters
+                    )
+                    if not response or not isinstance(response, dict):
+                        raise RuntimeError(f"Unexpected response format: {response}")
 
-                response = ollama.chat(
-                    model="qwen2.5-coder",
-                    messages=messages,
-                    options=self.parameters
-                )
+                    if 'message' not in response or 'content' not in response['message']:
+                        raise RuntimeError(f"Response missing required fields: {response}")
+                    combined_code = self.executor.extract_code(response)
+                    if not combined_code or not combined_code.strip():
+                        raise ValueError("Generated empty code")
+                    combined_code = self.executor.clean_main_block(combined_code)
 
-                if not response or not isinstance(response, dict):
-                    raise RuntimeError(f"Unexpected response format: {response}")
+                    # Analyze and test the code
+                    analysis_results = self.error_handler.analyze_code(combined_code)
+                    if analysis_results and isinstance(analysis_results, dict):
+                        if analysis_results.get('pylint_errors') or analysis_results.get('bandit_issues'):
+                            raise RuntimeError("Static analysis found issues")
 
-                if 'message' not in response or 'content' not in response['message']:
-                    raise RuntimeError(f"Response missing required fields: {response}")
+                    requirements = self.executor.extract_requirements(combined_code)
+                    ret_code, stdout, stderr = self.executor.install_requirements(requirements)
 
-                combined_code = self.executor.extract_code(response)
-                if not combined_code or not combined_code.strip():
-                    raise ValueError("Generated empty code")
+                    if ret_code != 0:
+                        raise RuntimeError(f"Requirements installation failed: {stderr}")
+                else:
+                    combined_code = code_string
 
-                combined_code = self.executor.clean_main_block(combined_code)
 
-                # Analyze and test the code
-                analysis_results = self.error_handler.analyze_code(combined_code)
-                if analysis_results and isinstance(analysis_results, dict):
-                    if analysis_results.get('pylint_errors') or analysis_results.get('bandit_issues'):
-                        raise RuntimeError("Static analysis found issues")
 
-                requirements = self.executor.extract_requirements(combined_code)
-                ret_code, stdout, stderr = self.executor.install_requirements(requirements)
-                if ret_code != 0:
-                    raise RuntimeError(f"Requirements installation failed: {stderr}")
+
 
                 ret_code, stdout, stderr = self.executor.execute_code(combined_code) #TODO: convert to process_and_execute
+
                 if ret_code != 0:
                     raise RuntimeError(f"Code execution failed: {stderr}")
 
@@ -298,6 +306,16 @@ class CodeEvolutionHandler:
         }
 
     def process_with_reflection(self, code_requirements: list, max_attempts: int = 20, dummy_mode=False): #-> Optional[execute_code: str]:
+        #TODO: Review docstring
+        """
+        Function processing the LLM generated code.
+        Runs a static analysis, annotates the errors, executes the code, detects runtime errors, and iteratively performs this process until executable code is generated.
+
+        :param code_requirements: The requirements for the code, provided by the user
+        :param max_attempts: Maximum iterations for attempting to create executable code
+        :param dummy_mode: if dummy_mode=True, run system with limited capabilities for test purposes
+        :return:
+        """
         if not code_requirements:
             raise ValueError("Code requirements list cannot be empty")
 
@@ -384,7 +402,7 @@ class CodeEvolutionHandler:
                     return None
 
             # Use process_and_execute for final combination
-            final_code = self._combine_code(combined_code)
+            final_code = self._combine_code(code_string=combined_code, dummy_mode = dummy_mode)
             if not final_code:
                 raise ValueError("Failed to combine code parts")
 
@@ -396,62 +414,69 @@ class CodeEvolutionHandler:
 
 
 if __name__ == "__main__":
+    #dummy_mode runs the system with limited capabilities for test purposes
+    dummy_mode = True
+
+    #CodeEvolutionHandler contains all the functionalities for running the system
     handler = CodeEvolutionHandler()
-    code_requirements = [
-        "validate_request_format(request_data) -> tuple[bool, str] - Verify JSON data has required fields (email, age, subscription_tier, user_data) with correct data types. Handle: malformed JSON -> 400, missing/null fields -> 400, invalid data types -> 422. Return (is_valid, error_msg)",
 
-        "validate_user_data(user_data) -> tuple[bool, str] - Check user_data contains valid preferences (notifications bool, theme str), payment_info (method, currency), and usage_metrics (array[3-10] of numbers). Handle: array index out of bounds -> 500, type conversion errors -> 422. Return (is_valid, error_msg)",
+    if not dummy_mode:
+        code_requirements = [
+            "validate_request_format(request_data) -> tuple[bool, str] - Verify JSON data has required fields (email, age, subscription_tier, user_data) with correct data types. Handle: malformed JSON -> 400, missing/null fields -> 400, invalid data types -> 422. Return (is_valid, error_msg)",
 
-        "validate_business_rules(email, age, subscription_tier) -> tuple[bool, str] - Validate email is @validcompany.com, age is 18-100, subscription_tier in ['basic', 'pro', 'enterprise']. Handle: type conversion errors -> 422. Return (is_valid, error_msg)",
+            "validate_user_data(user_data) -> tuple[bool, str] - Check user_data contains valid preferences (notifications bool, theme str), payment_info (method, currency), and usage_metrics (array[3-10] of numbers). Handle: array index out of bounds -> 500, type conversion errors -> 422. Return (is_valid, error_msg)",
 
-        "calculate_metrics(age, usage_metrics, payment_method, subscription_tier) -> dict - Calculate price (basic:$10, pro:$25, enterprise:$50), risk_score (age * avg_usage / 10), premium_multiplier (1.5 if crypto). Handle: division by zero -> 500, integer overflow -> 500. Return calculated metrics dict",
+            "validate_business_rules(email, age, subscription_tier) -> tuple[bool, str] - Validate email is @validcompany.com, age is 18-100, subscription_tier in ['basic', 'pro', 'enterprise']. Handle: type conversion errors -> 422. Return (is_valid, error_msg)",
 
-        "process_request() -> Response - Main /api/process POST handler: check rate limit (429 if exceeded), validate data (400/422 for validation fails), calculate metrics (500 for calculation errors), add timestamp and renewal_date, return appropriate HTTP response",
+            "calculate_metrics(age, usage_metrics, payment_method, subscription_tier) -> dict - Calculate price (basic:$10, pro:$25, enterprise:$50), risk_score (age * avg_usage / 10), premium_multiplier (1.5 if crypto). Handle: division by zero -> 500, integer overflow -> 500. Return calculated metrics dict",
 
-        "get_rate_limit_status(ip_address) -> tuple[bool, int] - Track and check if IP exceeded 5 requests/minute, return (is_allowed, current_count). Handle concurrent access to rate limit data",
+            "process_request() -> Response - Main /api/process POST handler: check rate limit (429 if exceeded), validate data (400/422 for validation fails), calculate metrics (500 for calculation errors), add timestamp and renewal_date, return appropriate HTTP response",
 
-        "get_system_metrics() -> dict - Get current memory usage and system uptime statistics. Handle potential OS-level errors -> 500",
+            "get_rate_limit_status(ip_address) -> tuple[bool, int] - Track and check if IP exceeded 5 requests/minute, return (is_allowed, current_count). Handle concurrent access to rate limit data",
 
-        "health_check() -> Response - Handle /api/health GET requests: return system metrics and rate limit counts. Handle service unavailability -> 503",
+            "get_system_metrics() -> dict - Get current memory usage and system uptime statistics. Handle potential OS-level errors -> 500",
 
-        "Error handlers: handle_bad_request() -> 400 for malformed JSON/missing/null fields, handle_validation_error() -> 422 for invalid data types/values, handle_rate_limit() -> 429 for rate exceeded, handle_server_error() -> 500 for calculation/overflow/division errors"
-    ]
+            "health_check() -> Response - Handle /api/health GET requests: return system metrics and rate limit counts. Handle service unavailability -> 503",
 
-    code_requirements = [
-"""
+            "Error handlers: handle_bad_request() -> 400 for malformed JSON/missing/null fields, handle_validation_error() -> 422 for invalid data types/values, handle_rate_limit() -> 429 for rate exceeded, handle_server_error() -> 500 for calculation/overflow/division errors"
+        ]
+    else:
+    #     code_requirements = [
+    # """
+    #
+    #
+    # global z
+    #
+    #
+    # if x > 10:
+    #     if x > 20:
+    #         if x > 30:
+    #             if x > 40:
+    #                 print("Nested conditions!")
+    #
+    #
+    #
+    # temp = tempfile.mktemp()
+    # with open(temp, 'w') as f:
+    #     f.write(user_input)
+    #
+    #
+    # db_password = "super_secret_password123"
+    #
+    #
+    # os.system(f"cat {filename}")
+    #
+    # """]
 
+        code_requirements = [
+            """
+def simple_func(x):
+    y = x*5
     
-global z
-
-
-if x > 10:
-    if x > 20:
-        if x > 30:
-            if x > 40:
-                print("Nested conditions!")
-                
-                
-
-temp = tempfile.mktemp()
-with open(temp, 'w') as f:
-    f.write(user_input)
-
-
-db_password = "super_secret_password123"
-
-
-os.system(f"cat {filename}")
-
-"""]
-# """
-# print("hello frigfjas")
-#
-# token = ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))
-# return token
-#
-# a=b
-# """]
+    return y
+    
+            """]
 
 
 
-    results = handler.process_with_reflection(code_requirements, dummy_mode = True)
+    results = handler.process_with_reflection(code_requirements=code_requirements,max_attempts=20,dummy_mode=dummy_mode)
