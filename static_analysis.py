@@ -46,43 +46,7 @@ class EnhancedErrorHandler(WebAppErrorHandler):
         self.project_dir = os.getcwd()
         self.executor = Executor(project_dir=self.project_dir, error_handler=self)
 
-    # def analyze_code(self, code: str) -> dict:
-    #     """Analyze code using the persistent environment."""
-    #     temp_file_path = None
-    #     try:
-    #         code = code.encode('utf-8', 'ignore').decode('utf-8')
-    #
-    #         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as temp_file:
-    #             temp_file.write(code)
-    #             temp_file_path = temp_file.name
-    #
-    #         python_path = self.executor._get_python_path()
-    #
-    #         pylint_output = subprocess.run(
-    #             [python_path, '-m', 'pylint', temp_file_path, '--output-format=json'],
-    #             capture_output=True,
-    #             text=True,
-    #             encoding='utf-8'
-    #         )
-    #         pylint_results = json.loads(pylint_output.stdout) if pylint_output.stdout else []
-    #
-    #         bandit_output = subprocess.run(
-    #             [python_path, '-m', 'bandit', '-f', 'json', temp_file_path],
-    #             capture_output=True,
-    #             text=True,
-    #             encoding='utf-8'
-    #         )
-    #         bandit_results = json.loads(bandit_output.stdout) if bandit_output.stdout else {}
-    #
-    #         return {
-    #             'pylint_errors': pylint_results,
-    #             'bandit_issues': bandit_results.get('results', []),
-    #             'error_patterns': self._extract_error_patterns(pylint_results, bandit_results)
-    #         }
-    #
-    #     except Exception as e:
-    #         print(f"Error during static analysis: {str(e)}")
-    #         return {'error': str(e)}
+
 
     def analyze_code(self, code: str) -> dict:
         """Analyze code for potential issues using static analysis tools."""
@@ -103,85 +67,86 @@ class EnhancedErrorHandler(WebAppErrorHandler):
             # Rejoin remaining lines
             '\n'.join(lines[start_index:])
 
-            # Create temp file for analysis
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', encoding='utf-8',
-                                             dir=os.getcwd()) as temp_file:
-                temp_file.write(code)
+            try:    # Create temp file for analysis
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8',
+                                                 dir=os.getcwd()) as temp_file:
+                    temp_file.write(code)
 
-                temp_file_path = temp_file.name
+                    temp_file_path = temp_file.name
 
-                # Run Pylint analysis
-                reporter = CaptureReporter()
-                Run([temp_file_path], reporter=reporter, exit=False)
-                str_pylint_results = reporter.output.getvalue()
+                    # Run Pylint analysis
+                    reporter = CaptureReporter()
+                    Run([temp_file_path], reporter=reporter, exit=False)
+                    str_pylint_results = reporter.output.getvalue()
 
-                # Initialize structures to track errors
-                pylint_results = []
-                content = str_pylint_results.strip()[8:-1]
-                previous_error = None  # Track just the previous error
+                    # Initialize structures to track errors
+                    pylint_results = []
+                    content = str_pylint_results.strip()[8:-1]
+                    previous_error = None  # Track just the previous error
 
-                # Split and process Pylint results
-                parts = content.split(",")
-                current_msg = {}
+                    # Split and process Pylint results
+                    parts = content.split(",")
+                    current_msg = {}
 
-                # Process Pylint results while checking for consecutive duplicates
-                for part in parts:
-                    if part.strip().startswith("msg="):
-                        msg_value = part.split("=")[1].strip().strip("'")
-                        current_msg['msg'] = msg_value
-                    elif part.strip().startswith("line="):
-                        line_value = int(part.split("=")[1].strip())
-                        current_msg['line'] = line_value + start_index
-                    elif part.strip().startswith("symbol="):
-                        symbol_value = part.split("=")[1].strip()
-                        current_msg['symbol'] = symbol_value
-                    elif part.strip().startswith("category="):
-                        category_value = part.split("=")[1].strip()
-                        current_msg['category'] = category_value
+                    # Process Pylint results while checking for consecutive duplicates
+                    for part in parts:
+                        if part.strip().startswith("msg="):
+                            msg_value = part.split("=")[1].strip().strip("'")
+                            current_msg['msg'] = msg_value
+                        elif part.strip().startswith("line="):
+                            line_value = int(part.split("=")[1].strip())
+                            current_msg['line'] = line_value + start_index
+                        elif part.strip().startswith("symbol="):
+                            symbol_value = part.split("=")[1].strip()
+                            current_msg['symbol'] = symbol_value
+                        elif part.strip().startswith("category="):
+                            category_value = part.split("=")[1].strip()
+                            current_msg['category'] = category_value
 
-                        # Create an identifier for this error
-                        error_key = f"{current_msg['msg']}_{current_msg['symbol']}"
+                            # Create an identifier for this error
+                            error_key = f"{current_msg['msg']}_{current_msg['symbol']}"
 
-                        # Only append if it's not identical to the previous error
-                        if error_key != previous_error:
-                            pylint_results.append(current_msg.copy())
-                            previous_error = error_key
+                            # Only append if it's not identical to the previous error
+                            if error_key != previous_error:
+                                pylint_results.append(current_msg.copy())
+                                previous_error = error_key
 
-                        current_msg = {}
+                            current_msg = {}
 
-                # Run Bandit analysis
-                bandit_output = subprocess.run(
-                    [sys.executable, '-m', 'bandit', '-f', 'json', temp_file_path],
-                    capture_output=True,
-                    text=True,
-                    encoding='utf-8'
-                )
-                bandit_results = json.loads(bandit_output.stdout) if bandit_output.stdout else {}
+                    # Run Bandit analysis
+                    bandit_output = subprocess.run(
+                        [sys.executable, '-m', 'bandit', '-f', 'json', temp_file_path],
+                        capture_output=True,
+                        text=True,
+                        encoding='utf-8'
+                    )
+                    bandit_results = json.loads(bandit_output.stdout) if bandit_output.stdout else {}
 
-                # Process Bandit results to remove consecutive duplicates
-                filtered_bandit_results = []
-                previous_bandit_issue = None
+                    # Process Bandit results to remove consecutive duplicates
+                    filtered_bandit_results = []
+                    previous_bandit_issue = None
 
-                for issue in bandit_results.get('results', []):
-                    # Create a unique identifier for the bandit issue
-                    issue_key = f"{issue.get('issue_text')}_{issue.get('test_id')}"
+                    for issue in bandit_results.get('results', []):
+                        # Create a unique identifier for the bandit issue
+                        issue_key = f"{issue.get('issue_text')}_{issue.get('test_id')}"
 
-                    if issue_key != previous_bandit_issue:
-                        filtered_bandit_results.append(issue)
-                        previous_bandit_issue = issue_key
+                        if issue_key != previous_bandit_issue:
+                            filtered_bandit_results.append(issue)
+                            previous_bandit_issue = issue_key
 
-                self.static_analysis_results = {
-                    'pylint_errors': pylint_results,
-                    'bandit_issues': filtered_bandit_results,
-                    'error_patterns': self._extract_error_patterns(pylint_results, {'results': filtered_bandit_results})
-                }
+                    self.static_analysis_results = {
+                        'pylint_errors': pylint_results,
+                        'bandit_issues': filtered_bandit_results,
+                        'error_patterns': self._extract_error_patterns(pylint_results, {'results': filtered_bandit_results})
+                    }
 
-                return self.static_analysis_results
-
-            try:
-                os.unlink(temp_file_path)
+                    return self.static_analysis_results
             except Exception as e:
-                print(f"Warning: Failed to clean up analysis temp file: {e}")
+             print(f"Warning: Failed to clean up analysis temp file: {e}")
+            finally:
+                temp_file.close()
+                os.unlink(temp_file_path)
+            #
 
         except Exception as e:
             print(f"Error during static analysis: {str(e)}")
