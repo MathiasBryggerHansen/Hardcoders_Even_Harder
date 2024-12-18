@@ -115,12 +115,11 @@ class CodeEvolutionHandler:
                 # Generate combined code
                 if not dummy_mode:
                     response = ollama.chat(
-                        model="qwen2.5-coder",
+                        model="qwen2.5-coder:14b",
                         messages=messages,
                         options=self.parameters
                     )
-                    if not response or not isinstance(response, dict):
-                        raise RuntimeError(f"Unexpected response format: {response}")
+
 
                     if 'message' not in response or 'content' not in response['message']:
                         raise RuntimeError(f"Response missing required fields: {response}")
@@ -281,13 +280,13 @@ class CodeEvolutionHandler:
             'content': user_message
         })
 
-        # Add debug print to see the messages being sent to the LLM
-        print("\nDEBUG: Messages being sent to LLM:")
-        for msg in messages:
-            print(f"\nRole: {msg['role']}")
-            print("Content:")
-            print(msg['content'])
-            print("-" * 80)
+        # # Add debug print to see the messages being sent to the LLM
+        # print("\nDEBUG: Messages being sent to LLM:")
+        # for msg in messages:
+        #     print(f"\nRole: {msg['role']}")
+        #     print("Content:")
+        #     print(msg['content'])
+        #     print("-" * 80)
 
         return messages
 
@@ -335,19 +334,21 @@ class CodeEvolutionHandler:
 
                         if not dummy_mode:
                             response = ollama.chat(
-                                model="qwen2.5-coder",
+                                model="qwen2.5-coder:14b",
                                 messages=messages,
                                 options=self.parameters
                             )
+                            #print(response["message"]["content"])
 
-                            code = self.error_handler.executor.extract_code(response)
-
+                            code = self.error_handler.executor.extract_code(response) #FIXED: this needed self variable
+                            print(code)
                             # packages = self.error_handler.executor.extract_packages(code)
 
                             if not code or not code.strip():
                                 raise ValueError("Generated code is empty")
 
                             code = self.error_handler.executor.clean_main_block(code) #TODO: consider if app() call is better to remove
+
                         else:
                             code = code_requirements[requirement_index]
 
@@ -394,6 +395,9 @@ class CodeEvolutionHandler:
 
                 if not requirement_success:
                     return None
+        except Exception as e:
+            print(f"Fatal error in process_with_reflection: {str(e)}")
+
 
             # Use process_and_execute for final combination
             final_code = self._combine_code(code_string=combined_code, dummy_mode = dummy_mode)
@@ -402,6 +406,7 @@ class CodeEvolutionHandler:
             print("final_code:")
             print(final_code)
             return final_code
+
 
         except Exception as e:
             print(f"Fatal error in process_with_reflection: {str(e)}")
@@ -445,4 +450,5 @@ def simple_func(x):
     
             """]
 
-    results = handler.process_with_reflection(code_requirements=code_requirements,max_attempts=20,dummy_mode=dummy_mode)
+    results = handler.process_with_reflection(code_requirements=code_requirements,dummy_mode=dummy_mode,max_attempts=20)
+
