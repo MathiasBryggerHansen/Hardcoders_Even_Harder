@@ -138,6 +138,8 @@ class EnhancedErrorHandler:
 
                     current_msg = {}
 
+
+
             # Run Bandit analysis
             bandit_output = subprocess.run(
                 [sys.executable, '-m', 'bandit', '-f', 'json', temp_file_path],
@@ -214,7 +216,7 @@ class EnhancedErrorHandler:
 
         return patterns
 
-    def enhance_error(self, error: Exception, code: str, stdout: str = None) -> str:
+    def enhance_error(self, error: Exception, code: str) -> str:
         """Enhance error messages with focused analysis results."""
         error_type = type(error).__name__
         error_msg = str(error)
