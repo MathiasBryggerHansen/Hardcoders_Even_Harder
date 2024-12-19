@@ -31,7 +31,7 @@ class CodeEvolutionHandler:
     #     lines = text.strip().splitlines()
     #     return [line for line in lines if ignore_keyword not in line]
 
-    def _combine_code(self, code_string: str,  dummy_mode: bool = False, max_attempts: int = 5) -> Optional[str]:
+    def _combine_code(self, code_string: str,  dummy_mode: bool = False, max_attempts: int = 5) -> Optional[str]: #TODO: new variable "combine", different options
         """Process and combine code using Ollama with proper message handling and testing.
         Ensures that the code genereated through the various requirements calls and error rectifications is combined into a functional app
 
@@ -47,8 +47,7 @@ class CodeEvolutionHandler:
             'role': 'system',
             'content': (
                 "You are designed to generate a fully functional python app that adheres to all requirements "
-                "given separate code snippets. You will receive detailed error analysis and patterns to help "
-                "improve each iteration of the code."
+                "given separate code snippets."
             )
         }
 

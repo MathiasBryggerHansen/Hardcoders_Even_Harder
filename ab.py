@@ -87,7 +87,7 @@ def example_usage():
         return b * 2
 
     annotator = CodeAnnotator()
-    annotated_code = annotator.annotate(buggy_calc, 5)
+    annotated_code = annotator.annotate(buggy_calc, 1)
     print(annotated_code)
 
 

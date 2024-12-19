@@ -165,6 +165,7 @@ def analyze_data(data_dict):
         if isinstance(value, (int, float)):
             total += value
             count += 1
+            print(count)
     return total / count if count > 0 else 0
 
 
