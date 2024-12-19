@@ -7,8 +7,8 @@ import sys
 from typing import Dict, List, Union
 import traceback
 import subprocess
+from pylint.reporters import JSONReporter
 import json
-
 import execution_module
 
 
@@ -94,49 +94,46 @@ class EnhancedErrorHandler:
             temp_file_path = temp_file.name
 
             # Run Pylint analysis
-            reporter = CaptureReporter()
-            Run([temp_file_path], reporter=reporter, exit=False)
-            str_pylint_results = reporter.output.getvalue()
+            # Create a string buffer to capture the output
+            output = StringIO()
 
-            # Initialize structures to track errors
+            # Use JSONReporter instead of text reporter for better parsing
+            reporter = JSONReporter(output)
+
+            # Configure Pylint options
+            options = [
+                temp_file_path,
+                '--disable=all',  # First disable all checks
+                '--enable=E,W,F,R,C',  # Then enable the ones we want
+                '--max-line-length=100',
+                '--persistent=no',
+                '--reports=no',
+                '--score=no',
+                '--msg-template="{path}:{line}: [{msg_id}({symbol}), {obj}] {msg}"'
+            ]
+
+            # Run Pylint with configured options
+            Run(options, reporter=reporter, exit=False)
+
+            # Get the JSON output
+            try:
+                pylint_output = json.loads(output.getvalue())
+            except json.JSONDecodeError:
+                return []  # Return empty list if no errors found
+
+            # Process and format the results
             pylint_results = []
-            content = str_pylint_results.strip()[8:-1]
-            previous_error = None  # Track just the previous error
-
-            # Split and process Pylint results
-            parts = content.split(",")
-            current_msg = {}
-
-            # Process Pylint results while checking for consecutive duplicates
-            #TODO: THE FIRST ERROR NEVER CORRECTLY APPENDS THE LINE ATTRIBUTE
-            for i, part in enumerate(parts):
-                cleaned_part = part.strip()
-                if cleaned_part.startswith("msg="):
-                    # Start a new message dictionary when we see a new msg
-                    current_msg = {}  # Reset for new message
-                    msg_value = part.split("=")[1].strip().strip("'")
-                    current_msg['msg'] = msg_value
-                elif "line=" in cleaned_part and not cleaned_part.startswith("end_line"):
-                    line_value = int(cleaned_part.split("=")[1].strip())
-                    current_msg['line'] = line_value + start_index
-                elif cleaned_part.startswith("symbol="):
-                    symbol_value = part.split("=")[1].strip().strip("'")
-                    current_msg['symbol'] = symbol_value
-                elif cleaned_part.startswith("category="):
-                    category_value = part.split("=")[1].strip().strip("'")
-                    current_msg['category'] = category_value
-                    # After we've collected all fields for this message, append it
-                    pylint_results.append(current_msg.copy())  # Use copy() to avoid reference issues
-
-                    # Create an identifier for this error
-                    error_key = f"{current_msg['msg']}_{current_msg['symbol']}"
-
-                    # Only append if it's not identical to the previous error
-                    if error_key != previous_error:
-                        pylint_results.append(current_msg.copy())
-                        previous_error = error_key
-
-                    current_msg = {}
+            for message in pylint_output:
+                error_info = {
+                    'type': message.get('type', 'unknown'),
+                    'line': message.get('line', 0),
+                    'column': message.get('column', 0),
+                    'path': message.get('path', ''),
+                    'symbol': message.get('symbol', ''),
+                    'message': message.get('message', ''),
+                    'message-id': message.get('message-id', '')
+                }
+                pylint_results.append(error_info)
 
             # Run Bandit analysis
             bandit_output = subprocess.run(
@@ -202,8 +199,8 @@ class EnhancedErrorHandler:
 
         # Process critical Pylint errors
         for result in pylint_results:
-            if result.get('category') in ('error', 'warning'):
-                patterns.append(f"Line {result['line']}: {result['msg']}")
+            if result.get('type') in ('error', 'warning'):
+                patterns.append(f"Line {result['line']}: {result['message']}")
 
         # Process security issues
         for issue in bandit_results['results']:
@@ -231,7 +228,7 @@ class EnhancedErrorHandler:
             for error in self.static_analysis_results['pylint_errors']:
                 line_num = error['line'] - 1
                 if 0 <= line_num < len(annotated_lines):
-                    comment = f"# {error['category'].upper()}: {error['msg']}"
+                    comment = f"# {error['type'].upper()}: {error['message']}"
                     annotated_lines[line_num] = f"{annotated_lines[line_num]:<80} {comment}"
 
         # Add runtime error annotations

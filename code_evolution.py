@@ -416,7 +416,7 @@ class CodeEvolutionHandler:
 
 if __name__ == "__main__":
     #dummy_mode runs the system with limited capabilities for test purposes
-    dummy_mode = False
+    dummy_mode = True
 
     #CodeEvolutionHandler contains all the functionalities for running the system
     handler = CodeEvolutionHandler()
@@ -444,10 +444,48 @@ if __name__ == "__main__":
     else:
         code_requirements = [
             """
-def simple_func(x):
-    y = x*5
+import json
+
+def validate_request_format(request_data):
+    try:
+        # Step 1: Parse JSON Data
+        data = json.loads(request_data)
+        
+        # Debugging print to show parsed data
+        print("Parsed JSON Data:", data)
+        
+        # Step 2: Validate Required Fields
+        required_fields = ['email', 'age', 'subscription_tier', 'user_data']
+        for field in required_fields:
+            if field not in data or data[field] is None:
+                return (False, f"400: Missing or null field '{field}'")
+        
+        # Debugging print to show all required fields are present
+        print("All required fields are present and not null.")
+        
+        # Step 3: Validate Data Types
+        if not isinstance(data['email'], str):
+            return (False, "422: 'email' must be a string")
+        if not isinstance(data['age'], int):
+            return (False, "422: 'age' must be an integer")
+        if not isinstance(data['subscription_tier'], str):
+            return (False, "422: 'subscription_tier' must be a string")
+        if not isinstance(data['user_data'], dict):
+            return (False, "422: 'user_data' must be a dictionary")
+        
+        # Debugging print to show all data types are valid
+        print("All data types are valid.")
+        
+        # Step 4: Return Result
+        return (True, "")
     
-    return y
+    except json.JSONDecodeError:
+        # Step 1.1: Handle Malformed JSON
+        return (False, "400: Malformed JSON")
+
+# Example usage:
+request_data = '{"email": "test@example.com", "age": 30, "subscription_tier": "basic", "user_data": {}}'
+print(validate_request_format(request_data))
     
             """]
 
