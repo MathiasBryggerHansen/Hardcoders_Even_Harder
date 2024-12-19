@@ -64,7 +64,7 @@ class CodeEvolutionHandler:
                     "6. No testing or dummy example functions\n"
                     "7. The code is within ```python ``` tags\n"
                     "8. ***OUTPUT THE FULL PYTHON APP***.\n"
-                    "Here are the code snippets:\n\n"
+                    "Here are the code parts:\n\n"
                     + code_string
             )
         }
@@ -365,7 +365,6 @@ class CodeEvolutionHandler:
                         print(ret_code, stdout, stderr)
                         if ret_code != 0:
                             error = RuntimeError(f"Code execution failed: {stderr}")
-                            enhanced_error = self.error_handler.enhance_error(error, code, stdout)
                             raise RuntimeError(enhanced_error)
 
 
@@ -373,7 +372,9 @@ class CodeEvolutionHandler:
                         combined_code += code + "\n\n"
                         requirement_success = True
                         break
-
+                    except RuntimeError:
+                        # Exits the loop if RuntimeError caught following enhance_error call at ret_code = 0
+                        break
                     except Exception as e:
                         code_to_analyze = code if 'code' in locals() else func
                         enhanced_error = self.error_handler.enhance_error(e, code_to_analyze)
