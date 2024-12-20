@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import itertools
 import tempfile
+import traced_execution
 
 
 class Executor:

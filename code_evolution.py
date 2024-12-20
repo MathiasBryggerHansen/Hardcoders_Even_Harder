@@ -488,5 +488,5 @@ print(validate_request_format(request_data))
     
             """]
 
-    results = handler.process_with_reflection(code_requirements=code_requirements,dummy_mode=dummy_mode,max_attempts=20)
+    results = handler.process_with_reflection(code_requirements=code_requirements,dummy_mode=True,max_attempts=1)
 

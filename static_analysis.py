@@ -10,7 +10,7 @@ import subprocess
 from pylint.reporters import JSONReporter
 import json
 import execution_module
-
+import traced_execution
 
 class CaptureReporter(BaseReporter):
     def __init__(self):
@@ -250,8 +250,11 @@ class EnhancedErrorHandler:
                 ""
             ]
             annotated_lines = header + annotated_lines
-
-        return '\n'.join(annotated_lines)
+        result = '\n'.join(annotated_lines)
+        result = traced_execution.show_traced_execution(result, print_output=False)
+        print("RESULT:")
+        print(result)
+        return result#'\n'.join(annotated_lines)
 
     def reset_tracking(self):
         """Reset error tracking for a new analysis session."""
